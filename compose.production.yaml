@@ -1,0 +1,25 @@
+services:
+  gateway:
+    environment:
+      SITE_ADDRESS: ${DOMAIN:?Set DOMAIN in the production environment}
+    ports: !override
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+
+  backend:
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+
+  worker:
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+
+volumes:
+  caddy_data:
+  caddy_config:
+

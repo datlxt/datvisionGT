@@ -16,7 +16,15 @@
 
 Hệ thống hỗ trợ hai nhóm đối tượng:
 
-1. **Khuôn mặt — phạm vi ưu tiên**
+1. **Biển số — phạm vi ưu tiên của MVP hiện tại**
+   - Phát hiện biển số.
+   - OCR biển số.
+   - Gom kết quả từ nhiều frame.
+   - Gán TrackID.
+   - Loại kết quả trùng.
+   - Kiểm duyệt Ground Truth.
+
+2. **Khuôn mặt — giai đoạn sau**
    - Phát hiện khuôn mặt.
    - Theo dõi khuôn mặt qua nhiều frame.
    - Gán TrackID.
@@ -24,14 +32,6 @@ Hệ thống hỗ trợ hai nhóm đối tượng:
    - Nhận diện danh tính theo gallery.
    - Phân loại Known hoặc Unknown.
    - Kiểm duyệt và cập nhật Ground Truth.
-
-2. **Biển số — phạm vi bổ sung**
-   - Phát hiện biển số.
-   - OCR biển số.
-   - Gom kết quả từ nhiều frame.
-   - Gán TrackID.
-   - Loại kết quả trùng.
-   - Kiểm duyệt Ground Truth.
 
 Luồng chính:
 
@@ -70,6 +70,12 @@ Hệ thống tạo:
 
 Phần này giúp dev clone repository, setup môi trường và chạy được toàn bộ codebase.
 
+> **Trạng thái triển khai hiện tại:** repository đã có Phase 0 theo hướng **plate-first**.
+> Backend, RQ worker, PostgreSQL, Redis và React/Caddy đã chạy được bằng Docker Compose;
+> detector/OCR, upload, authentication và review workflow chưa được tích hợp. Hướng dẫn đang chạy
+> thực tế nằm tại `docs/00-getting-started.md`. Các mục chưa được implement bên dưới được giữ lại
+> như target specification, không phải command đã sẵn sàng.
+
 ## 2.1. Yêu cầu hệ thống
 
 Cần cài đặt:
@@ -93,8 +99,8 @@ Các thành phần trên có thể chạy hoàn toàn bằng Docker.
 
 | Thành phần | Phiên bản |
 |---|---:|
-| Python | 3.11 |
-| Node.js | 20 LTS |
+| Python | 3.12 |
+| Node.js | 22 LTS |
 | PostgreSQL | 16 |
 | Redis | 7 |
 | Docker Compose | v2 |
@@ -688,7 +694,19 @@ DatVision GT hỗ trợ tự động hóa phần lớn quá trình trên nhưng 
 
 ## 6.2. Ưu tiên sản phẩm
 
-### Ưu tiên 1 — Khuôn mặt
+### Ưu tiên 1 — Biển số
+
+- Chọn hoặc tích hợp model LPR phù hợp; hiện chưa có model.
+- Plate Detection.
+- OCR.
+- Multi-frame Voting.
+- Plate Tracking.
+- Duplicate Handling.
+- Ground Truth Verification.
+
+Không ưu tiên train mới toàn bộ LPR model trong MVP.
+
+### Ưu tiên 2 — Khuôn mặt
 
 - Face Detection.
 - Face Tracking.
@@ -698,18 +716,6 @@ DatVision GT hỗ trợ tự động hóa phần lớn quá trình trên nhưng 
 - Gallery Matching.
 - Known/Unknown Classification.
 - Ground Truth Verification.
-
-### Ưu tiên 2 — Biển số
-
-- Tích hợp model LPR hiện có.
-- Plate Detection.
-- OCR.
-- Multi-frame Voting.
-- Plate Tracking.
-- Duplicate Handling.
-- Ground Truth Verification.
-
-Không ưu tiên train mới toàn bộ LPR model trong MVP.
 
 ---
 
@@ -2113,7 +2119,6 @@ Công việc:
 
 ## Phase 2 — Detection Baseline
 
-- Face Detector.
 - Plate Detector.
 - ROI Filter.
 - Full Frame Saving.
@@ -2129,8 +2134,6 @@ Công việc:
 - TrackID.
 - Start/End.
 - Best Frame.
-- Face Embedding.
-- Gallery Matching.
 - Plate OCR.
 - Multi-frame Voting.
 - Duplicate Detection.
@@ -2754,27 +2757,19 @@ Phase 3 — Tracking and Recognition
 Phase 4 — Human Verification
 ```
 
-Nhiệm vụ đầu tiên:
+Nhiệm vụ tiếp theo sau khi Phase 0 hoàn tất:
 
 ```text
-Chỉ thực hiện Phase 0 — Setup Codebase.
+Thực hiện Phase 1 — Evidence Baseline cho biển số.
 
-Yêu cầu:
-- Docker Compose chạy PostgreSQL, Redis, backend, worker và frontend.
-- FastAPI có health endpoint.
-- PostgreSQL kết nối bằng SQLAlchemy.
-- Alembic migration hoạt động.
-- React frontend chạy được.
-- Worker kết nối Redis.
-- .env.example đầy đủ.
-- Makefile hỗ trợ build, up, down, migrate, test.
-- README Quick Start chạy đúng.
-- Có smoke test.
-
-Chưa tích hợp model AI.
-Chưa làm tracking.
-Chưa làm recognition.
-Chưa xây toàn bộ giao diện.
+Yêu cầu trước khi tích hợp detector/OCR:
+- Đọc metadata và PTS của video mẫu.
+- Lấy frame/timestamp đúng cả với video VFR.
+- Tính SHA-256 file nguồn.
+- Validate bbox trước khi crop.
+- Lưu full frame và crop theo từng job.
+- Không cho phép evidence tham chiếu chéo job.
+- Có test bằng video mẫu hiện có.
 ```
 
 ---
@@ -2944,10 +2939,10 @@ Prototype / MVP Development
 ```text
 Setup Codebase
 → Evidence Pipeline
-→ Face Detection
+→ Plate Detection
 → Excel Baseline
 → Tracking
-→ Recognition
+→ Plate OCR và multi-frame voting
 → Review Workspace
 → GT Final Export
 ```

@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+storage
+models
+node_modules
+**/__pycache__
+**/.pytest_cache
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+

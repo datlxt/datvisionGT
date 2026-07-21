@@ -1,0 +1,127 @@
+name: datvision-gt
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-datvision_gt}
+      POSTGRES_USER: ${POSTGRES_USER:-datvision}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_before_deploy}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks: [internal]
+
+  backend:
+    build:
+      context: ./backend
+      target: runtime
+    environment: &app-environment
+      APP_NAME: ${APP_NAME:-DatVision GT}
+      APP_ENV: ${APP_ENV:-development}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://datvision:change_me_before_deploy@postgres:5432/datvision_gt}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      RQ_QUEUE: ${RQ_QUEUE:-datvision}
+      STORAGE_ROOT: ${STORAGE_ROOT:-/app/storage}
+      MODEL_ROOT: ${MODEL_ROOT:-/app/models}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+    volumes:
+      - ${DATA_ROOT:-./storage}:/app/storage
+      - ${MODEL_DATA_ROOT:-./models}:/app/models:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/live', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks: [internal]
+
+  worker:
+    build:
+      context: ./backend
+      target: runtime
+    command: ["sh", "-c", "rq worker --url \"$${REDIS_URL}\" \"$${RQ_QUEUE}\""]
+    environment: *app-environment
+    volumes:
+      - ${DATA_ROOT:-./storage}:/app/storage
+      - ${MODEL_DATA_ROOT:-./models}:/app/models:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [internal]
+
+  gateway:
+    build:
+      context: ./frontend
+    environment:
+      SITE_ADDRESS: :80
+    ports:
+      - "${HTTP_PORT:-5173}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks: [internal]
+
+  migrate:
+    profiles: [tools]
+    build:
+      context: ./backend
+      target: runtime
+    command: ["alembic", "upgrade", "head"]
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+
+  test:
+    profiles: [tools]
+    build:
+      context: ./backend
+      target: test
+    command: ["pytest"]
+    environment: *app-environment
+    networks: [internal]
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  internal:
+    driver: bridge

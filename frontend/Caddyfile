@@ -1,0 +1,18 @@
+{$SITE_ADDRESS::80} {
+    encode zstd gzip
+
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+
+    @api_docs path /docs* /redoc* /openapi.json
+    handle @api_docs {
+        reverse_proxy backend:8000
+    }
+
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+}
