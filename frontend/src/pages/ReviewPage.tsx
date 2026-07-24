@@ -1,0 +1,403 @@
+import { useEffect, useMemo, useState } from "react";
+
+import { Icon } from "../components/Icon";
+import {
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  PageHeader,
+  StatusBadge,
+} from "../components/ui";
+import { api } from "../lib/api";
+import {
+  formatTime,
+  isSuspectedNoPlate,
+  resultLabel,
+} from "../lib/format";
+import type { EventResult, Job, ResultList } from "../types";
+
+type Filter = "ALL" | "RECOGNIZED" | "REVIEW" | "NO_PLATE";
+
+function confidence(value: number | null) {
+  return value === null ? "Chưa có dữ liệu" : `${Math.round(value * 100)}%`;
+}
+
+function EvidenceBox({
+  bbox,
+  width,
+  height,
+  label,
+  tone,
+}: {
+  bbox: [number, number, number, number];
+  width: number;
+  height: number;
+  label: string;
+  tone: "vehicle" | "plate";
+}) {
+  const [x1, y1, x2, y2] = bbox;
+  return (
+    <span
+      className={`evidence-bbox bbox-${tone}`}
+      style={{
+        left: `${(x1 / width) * 100}%`,
+        top: `${(y1 / height) * 100}%`,
+        width: `${((x2 - x1) / width) * 100}%`,
+        height: `${((y2 - y1) / height) * 100}%`,
+      }}
+    >
+      <b>{label}</b>
+    </span>
+  );
+}
+
+function classificationTone(event: EventResult) {
+  if (event.classification === "RECOGNIZED") return "success" as const;
+  if (event.classification === "NO_PLATE") return "warning" as const;
+  if (isSuspectedNoPlate(event)) return "duplicate" as const;
+  return "neutral" as const;
+}
+
+export function ReviewPage({ job }: { job: Job }) {
+  const [results, setResults] = useState<ResultList | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Filter>("ALL");
+  const [query, setQuery] = useState("");
+  const [error, setError] = useState("");
+  const [reloadToken, setReloadToken] = useState(0);
+
+  useEffect(() => {
+    api<ResultList>(`/api/v1/jobs/${job.id}/results`)
+      .then((payload) => {
+        setResults(payload);
+        setSelectedId(payload.events[0]?.track_id ?? null);
+      })
+      .catch((reason: unknown) =>
+        setError(reason instanceof Error ? reason.message : "Không thể tải kết quả."),
+      );
+  }, [job.id, reloadToken]);
+
+  const filteredEvents = useMemo(() => {
+    if (!results) return [];
+    const normalizedQuery = query.trim().toUpperCase();
+    return results.events.filter((event) => {
+      const matchesQuery =
+        !normalizedQuery ||
+        event.track_code.toUpperCase().includes(normalizedQuery) ||
+        (event.normalized_plate ?? "").toUpperCase().includes(normalizedQuery);
+      if (!matchesQuery) return false;
+      if (filter === "RECOGNIZED") return event.classification === "RECOGNIZED";
+      if (filter === "NO_PLATE") return event.classification === "NO_PLATE";
+      if (filter === "REVIEW") {
+        return (
+          event.classification === "LOW_CONFIDENCE" ||
+          event.classification === "UNREADABLE"
+        );
+      }
+      return true;
+    });
+  }, [filter, query, results]);
+
+  const selected =
+    results?.events.find((event) => event.track_id === selectedId) ??
+    filteredEvents[0] ??
+    null;
+  const selectedIndex = selected
+    ? filteredEvents.findIndex((event) => event.track_id === selected.track_id)
+    : -1;
+  const suspected = results?.events.filter(isSuspectedNoPlate).length ?? 0;
+
+  if (error) {
+    return (
+      <section className="page">
+        <ErrorState
+          message={error}
+          onRetry={() => {
+            setResults(null);
+            setError("");
+            setReloadToken((value) => value + 1);
+          }}
+        />
+      </section>
+    );
+  }
+  if (!results) {
+    return (
+      <section className="page">
+        <LoadingState label="Đang tải evidence và kết quả model…" />
+      </section>
+    );
+  }
+
+  return (
+    <section className="page review-page">
+      <PageHeader
+        action={
+          <a className="button button-secondary" href={`/api/v1/jobs/${job.id}/export.csv`}>
+            <Icon name="download" size={18} /> Export kết quả model CSV
+          </a>
+        }
+        description={`${results.total} case model · ${results.counts.RECOGNIZED ?? 0} đọc được · ${
+          results.counts.NO_PLATE ?? 0
+        } không biển · ${suspected} nghi không biển`}
+        eyebrow={job.job_code}
+        title={job.source_name}
+      />
+
+      <div className="review-toolbar card">
+        <label>
+          <Icon name="search" size={18} />
+          <input
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Tìm TrackID hoặc biển số…"
+            value={query}
+          />
+        </label>
+        <div className="filter-tabs">
+          {[
+            ["ALL", "Tất cả", results.total],
+            ["RECOGNIZED", "Đọc được", results.counts.RECOGNIZED ?? 0],
+            [
+              "REVIEW",
+              "Cần xem lại",
+              (results.counts.LOW_CONFIDENCE ?? 0) + (results.counts.UNREADABLE ?? 0),
+            ],
+            ["NO_PLATE", "Không biển", results.counts.NO_PLATE ?? 0],
+          ].map(([value, label, count]) => (
+            <button
+              className={filter === value ? "active" : ""}
+              key={value}
+              onClick={() => setFilter(value as Filter)}
+              type="button"
+            >
+              {label} <span>{count}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {selected ? (
+        <div className="review-grid">
+          <aside className="card track-panel">
+            <header>
+              <div>
+                <h2>Danh sách Track</h2>
+                <span>{filteredEvents.length}</span>
+              </div>
+              <p>Mỗi track là một lượt xe do model tạo.</p>
+            </header>
+            <div className="track-list">
+              {filteredEvents.map((event) => (
+                <button
+                  className={`track-item ${event.track_id === selected.track_id ? "active" : ""}`}
+                  key={event.track_id}
+                  onClick={() => setSelectedId(event.track_id)}
+                  type="button"
+                >
+                  <img
+                    alt={`Evidence ${event.track_code}`}
+                    src={event.plate_crop_url ?? event.vehicle_crop_url}
+                  />
+                  <span>
+                    <strong>{resultLabel(event)}</strong>
+                    <small>{event.track_code}</small>
+                    <small>
+                      {formatTime(event.start_timestamp_ms)} · {confidence(event.confidence)}
+                    </small>
+                  </span>
+                  <StatusBadge tone={classificationTone(event)}>
+                    {event.classification === "RECOGNIZED" ? "OCR" : "Xem"}
+                  </StatusBadge>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <section className="card evidence-panel">
+            <div className="evidence-tabs">
+              <button className="active" type="button">
+                Full frame
+              </button>
+              <button disabled title="Không có API frame lân cận" type="button">
+                Frame lân cận
+              </button>
+              <span>Evidence Viewer</span>
+            </div>
+
+            <div className="full-frame">
+              <img alt={`Full frame ${selected.track_code}`} src={selected.full_frame_url} />
+              <span className="frame-stamp">
+                {formatTime(selected.best_timestamp_ms)} · Frame{" "}
+                {selected.best_frame_number.toLocaleString("vi-VN")}
+              </span>
+              {job.width && job.height && (
+                <>
+                  <EvidenceBox
+                    bbox={selected.vehicle_bbox}
+                    height={job.height}
+                    label={selected.track_code}
+                    tone="vehicle"
+                    width={job.width}
+                  />
+                  {selected.plate_bbox && (
+                    <EvidenceBox
+                      bbox={selected.plate_bbox}
+                      height={job.height}
+                      label={selected.normalized_plate ?? "PLATE"}
+                      tone="plate"
+                      width={job.width}
+                    />
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="evidence-bottom">
+              <div className="best-crop">
+                <span>{selected.plate_crop_url ? "Crop biển số" : "Crop xe"}</span>
+                <img
+                  alt={`Crop ${selected.track_code}`}
+                  src={selected.plate_crop_url ?? selected.vehicle_crop_url}
+                />
+              </div>
+              <dl className="metadata-grid">
+                <div>
+                  <dt>TrackID</dt>
+                  <dd>{selected.track_code}</dd>
+                </div>
+                <div>
+                  <dt>Timestamp</dt>
+                  <dd>{formatTime(selected.best_timestamp_ms)}</dd>
+                </div>
+                <div>
+                  <dt>BBox xe</dt>
+                  <dd>{selected.vehicle_bbox.join(", ")}</dd>
+                </div>
+                <div>
+                  <dt>BBox biển</dt>
+                  <dd>{selected.plate_bbox?.join(", ") ?? "Không phát hiện"}</dd>
+                </div>
+                <div>
+                  <dt>Số detection xe</dt>
+                  <dd>{selected.vehicle_detection_count}</dd>
+                </div>
+                <div>
+                  <dt>Số detection biển</dt>
+                  <dd>{selected.plate_detection_count}</dd>
+                </div>
+              </dl>
+            </div>
+            <footer className="evidence-footer">
+              <Icon name="shield" size={16} /> No evidence, no record.
+            </footer>
+          </section>
+
+          <aside className="card gt-panel">
+            <section className="prediction-section">
+              <div className="panel-section-title">
+                <div>
+                  <span>Prediction</span>
+                  <h2>Kết quả model</h2>
+                </div>
+                <StatusBadge tone={classificationTone(selected)}>
+                  {selected.classification}
+                </StatusBadge>
+              </div>
+              <strong className="prediction-value">{resultLabel(selected)}</strong>
+              <dl>
+                <div>
+                  <dt>Raw OCR</dt>
+                  <dd>{selected.raw_plate ?? "Không có"}</dd>
+                </div>
+                <div>
+                  <dt>OCR vote confidence</dt>
+                  <dd>{confidence(selected.confidence)}</dd>
+                </div>
+                <div>
+                  <dt>Plate detection</dt>
+                  <dd>{confidence(selected.plate_confidence)}</dd>
+                </div>
+                <div>
+                  <dt>Vehicle detection</dt>
+                  <dd>{confidence(selected.vehicle_confidence)}</dd>
+                </div>
+                <div>
+                  <dt>Quality score</dt>
+                  <dd>{confidence(selected.quality_score)}</dd>
+                </div>
+              </dl>
+              {selected.quality_flags.length > 0 && (
+                <div className="quality-flags">
+                  {selected.quality_flags.map((flag) => (
+                    <span key={flag}>{flag}</span>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="ground-truth-section">
+              <div className="panel-section-title">
+                <div>
+                  <span>Ground Truth</span>
+                  <h2>Kiểm duyệt của con người</h2>
+                </div>
+                <StatusBadge>Chưa có API</StatusBadge>
+              </div>
+              <label>
+                GT Plate
+                <input disabled placeholder="Chưa có dữ liệu" />
+              </label>
+              <label>
+                Classification
+                <select disabled defaultValue="">
+                  <option value="">Chưa có dữ liệu</option>
+                </select>
+              </label>
+              <label>
+                Verify status
+                <select disabled defaultValue="">
+                  <option value="">Chưa có dữ liệu</option>
+                </select>
+              </label>
+              <label>
+                Ghi chú kiểm duyệt
+                <textarea disabled placeholder="Backend chưa có endpoint ghi Ground Truth" />
+              </label>
+              <button className="button button-primary button-block" disabled type="button">
+                <Icon name="check" size={18} /> Xác nhận GT
+              </button>
+              <p className="backend-note">
+                Database đã có Ground Truth schema nhưng ứng dụng chưa có API đọc/ghi record kiểm
+                duyệt. UI không gửi dữ liệu giả.
+              </p>
+            </section>
+
+            <footer className="review-navigation">
+              <button
+                disabled={selectedIndex <= 0}
+                onClick={() => setSelectedId(filteredEvents[selectedIndex - 1].track_id)}
+                type="button"
+              >
+                ← Record trước
+              </button>
+              <button
+                disabled={selectedIndex < 0 || selectedIndex >= filteredEvents.length - 1}
+                onClick={() => setSelectedId(filteredEvents[selectedIndex + 1].track_id)}
+                type="button"
+              >
+                Record tiếp →
+              </button>
+            </footer>
+          </aside>
+        </div>
+      ) : (
+        <div className="card">
+          <EmptyState
+            description="Hãy thay đổi bộ lọc hoặc kiểm tra lại kết quả pipeline."
+            title="Không có track phù hợp"
+          />
+        </div>
+      )}
+    </section>
+  );
+}

@@ -1,0 +1,495 @@
+from __future__ import annotations
+
+import csv
+import io
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
+from app.models import Artifact, Detection, ProcessingJob, RecognitionResult, Track
+
+router = APIRouter(prefix="/jobs", tags=["results"])
+
+
+class EventResult(BaseModel):
+    track_id: uuid.UUID
+    track_code: str
+    classification: str
+    normalized_plate: str | None
+    raw_plate: str | None
+    confidence: float | None
+    start_timestamp_ms: int
+    end_timestamp_ms: int
+    best_timestamp_ms: int
+    best_frame_number: int
+    vehicle_bbox: tuple[int, int, int, int]
+    plate_bbox: tuple[int, int, int, int] | None
+    vehicle_confidence: float
+    plate_confidence: float | None
+    vehicle_detection_count: int
+    plate_detection_count: int
+    quality_score: float | None
+    quality_flags: list[str]
+    full_frame_url: str
+    vehicle_crop_url: str
+    plate_crop_url: str | None
+
+
+class ResultList(BaseModel):
+    job_id: uuid.UUID
+    source_name: str
+    status: str
+    total: int
+    counts: dict[str, int]
+    events: list[EventResult]
+
+
+def _artifact_url(job_id: uuid.UUID, artifact: Artifact) -> str:
+    filename = artifact.storage_key.rsplit("/", 1)[-1]
+    folder = "frames" if artifact.kind == "FULL_FRAME" else "crops"
+    return f"/api/v1/evidence/{job_id}/{folder}/{filename}"
+
+
+def _bbox_iou(
+    left: tuple[int, int, int, int], right: tuple[int, int, int, int]
+) -> float:
+    intersection_width = max(0, min(left[2], right[2]) - max(left[0], right[0]))
+    intersection_height = max(0, min(left[3], right[3]) - max(left[1], right[1]))
+    intersection = intersection_width * intersection_height
+    if intersection == 0:
+        return 0.0
+    left_area = max(0, left[2] - left[0]) * max(0, left[3] - left[1])
+    right_area = max(0, right[2] - right[0]) * max(0, right[3] - right[1])
+    union = left_area + right_area - intersection
+    return intersection / union if union else 0.0
+
+
+def _plate_edit_distance(left: str, right: str) -> int:
+    previous = list(range(len(right) + 1))
+    for left_index, left_character in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_character in enumerate(right, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[right_index] + 1,
+                    previous[right_index - 1] + (left_character != right_character),
+                )
+            )
+        previous = current
+    return previous[-1]
+
+
+def _persisted_plate_variants_match(previous: EventResult, event: EventResult) -> bool:
+    if not previous.normalized_plate or not event.normalized_plate:
+        return False
+    if previous.normalized_plate == event.normalized_plate:
+        return False
+    if _plate_edit_distance(previous.normalized_plate, event.normalized_plate) > 2:
+        return False
+    gap_ms = event.start_timestamp_ms - previous.end_timestamp_ms
+    if gap_ms <= 0:
+        return True
+    same_prefix = previous.normalized_plate[:2] == event.normalized_plate[:2]
+    if same_prefix and gap_ms <= 500:
+        return True
+    return (
+        same_prefix
+        and gap_ms <= 1_500
+        and _bbox_iou(previous.vehicle_bbox, event.vehicle_bbox) >= 0.15
+    )
+
+
+def _merge_persisted_motion_candidates(
+    events: list[EventResult],
+    *,
+    max_gap_ms: int = 1_250,
+    no_plate_gap_ms: int = 20_000,
+    min_no_plate_detections: int = 5,
+) -> list[EventResult]:
+    """Keep API/CSV at one review case when MOG2 produced adjacent fragments."""
+
+    reviewed_events: list[EventResult] = []
+    for event in events:
+        if (
+            event.classification == "NO_PLATE"
+            and event.vehicle_detection_count < min_no_plate_detections
+        ):
+            event = event.model_copy(
+                update={
+                    "classification": "UNREADABLE",
+                    "quality_flags": sorted(
+                        {*event.quality_flags, "INSUFFICIENT_NO_PLATE_EVIDENCE"}
+                    ),
+                }
+            )
+        reviewed_events.append(event)
+    events = reviewed_events
+
+    plated = [event for event in events if event.plate_detection_count > 0]
+    events = [
+        event
+        for event in events
+        if event.plate_detection_count > 0
+        or not any(
+            event.start_timestamp_ms <= plate_event.end_timestamp_ms
+            and event.end_timestamp_ms >= plate_event.start_timestamp_ms
+            for plate_event in plated
+        )
+    ]
+    candidates = [
+        event
+        for event in events
+        if "MOTION_ONLY_NO_PLATE_CANDIDATE" in event.quality_flags
+    ]
+    stable = [
+        event
+        for event in events
+        if "MOTION_ONLY_NO_PLATE_CANDIDATE" not in event.quality_flags
+    ]
+    merged: list[EventResult] = []
+    for event in sorted(candidates, key=lambda item: item.start_timestamp_ms):
+        if (
+            not merged
+            or event.start_timestamp_ms - merged[-1].end_timestamp_ms > max_gap_ms
+        ):
+            merged.append(event)
+            continue
+        previous = merged[-1]
+        best = max(
+            (previous, event),
+            key=lambda item: (
+                item.vehicle_detection_count,
+                item.quality_score or 0,
+                item.vehicle_confidence,
+            ),
+        )
+        merged[-1] = best.model_copy(
+            update={
+                "track_code": previous.track_code,
+                "start_timestamp_ms": min(
+                    previous.start_timestamp_ms, event.start_timestamp_ms
+                ),
+                "end_timestamp_ms": max(previous.end_timestamp_ms, event.end_timestamp_ms),
+                "vehicle_detection_count": (
+                    previous.vehicle_detection_count + event.vehicle_detection_count
+                ),
+                "quality_flags": sorted(
+                    {
+                        *previous.quality_flags,
+                        *event.quality_flags,
+                        "MERGED_MOTION_FRAGMENTS",
+                    }
+                ),
+            }
+        )
+    combined = sorted([*stable, *merged], key=lambda event: event.start_timestamp_ms)
+    deduplicated: list[EventResult] = []
+    for event in combined:
+        if event.classification != "NO_PLATE":
+            deduplicated.append(event)
+            continue
+        match_index = next(
+            (
+                index
+                for index in range(len(deduplicated) - 1, -1, -1)
+                if deduplicated[index].classification == "NO_PLATE"
+                and event.start_timestamp_ms - deduplicated[index].end_timestamp_ms
+                <= no_plate_gap_ms
+                and _bbox_iou(event.vehicle_bbox, deduplicated[index].vehicle_bbox) >= 0.5
+            ),
+            None,
+        )
+        if match_index is None:
+            deduplicated.append(event)
+            continue
+        previous = deduplicated[match_index]
+        best = max(
+            (previous, event),
+            key=lambda item: (
+                item.vehicle_detection_count,
+                item.quality_score or 0,
+                item.vehicle_confidence,
+            ),
+        )
+        deduplicated[match_index] = best.model_copy(
+            update={
+                "track_code": previous.track_code,
+                "start_timestamp_ms": min(
+                    previous.start_timestamp_ms, event.start_timestamp_ms
+                ),
+                "end_timestamp_ms": max(previous.end_timestamp_ms, event.end_timestamp_ms),
+                "vehicle_detection_count": (
+                    previous.vehicle_detection_count + event.vehicle_detection_count
+                ),
+                "quality_flags": sorted(
+                    {
+                        *previous.quality_flags,
+                        *event.quality_flags,
+                        "MERGED_DUPLICATE_TRACK",
+                    }
+                ),
+            }
+        )
+    variant_merged: list[EventResult] = []
+    for event in deduplicated:
+        match_index = next(
+            (
+                index
+                for index in range(len(variant_merged) - 1, -1, -1)
+                if _persisted_plate_variants_match(variant_merged[index], event)
+            ),
+            None,
+        )
+        if match_index is None:
+            variant_merged.append(event)
+            continue
+        previous = variant_merged[match_index]
+        best = max(
+            (previous, event),
+            key=lambda item: (
+                item.classification == "RECOGNIZED",
+                item.confidence or 0,
+                item.quality_score or 0,
+                item.plate_detection_count,
+            ),
+        )
+        flags = {
+            *previous.quality_flags,
+            *event.quality_flags,
+            "MERGED_NEAR_OCR_VARIANT",
+        }
+        if best.classification == "RECOGNIZED":
+            flags.discard("SINGLE_READING_OCR")
+        variant_merged[match_index] = best.model_copy(
+            update={
+                "track_code": previous.track_code,
+                "start_timestamp_ms": min(
+                    previous.start_timestamp_ms, event.start_timestamp_ms
+                ),
+                "end_timestamp_ms": max(previous.end_timestamp_ms, event.end_timestamp_ms),
+                "vehicle_detection_count": (
+                    previous.vehicle_detection_count + event.vehicle_detection_count
+                ),
+                "plate_detection_count": (
+                    previous.plate_detection_count + event.plate_detection_count
+                ),
+                "quality_flags": sorted(flags),
+            }
+        )
+
+    unique_events: list[EventResult] = []
+    plate_index: dict[str, int] = {}
+    for event in variant_merged:
+        if not event.normalized_plate:
+            unique_events.append(event)
+            continue
+        match_index = plate_index.get(event.normalized_plate)
+        if match_index is None:
+            plate_index[event.normalized_plate] = len(unique_events)
+            unique_events.append(event)
+            continue
+        previous = unique_events[match_index]
+        best = max(
+            (previous, event),
+            key=lambda item: (
+                item.classification == "RECOGNIZED",
+                item.confidence or 0,
+                item.quality_score or 0,
+                item.plate_detection_count,
+            ),
+        )
+        flags = {
+            *previous.quality_flags,
+            *event.quality_flags,
+            "DEDUPLICATED_BY_PLATE",
+        }
+        classification = best.classification
+        combined_plate_count = previous.plate_detection_count + event.plate_detection_count
+        if combined_plate_count >= 2 and (best.confidence or 0) >= 0.75:
+            classification = "RECOGNIZED"
+            flags.discard("SINGLE_READING_OCR")
+        unique_events[match_index] = best.model_copy(
+            update={
+                "track_code": previous.track_code,
+                "classification": classification,
+                "start_timestamp_ms": min(
+                    previous.start_timestamp_ms, event.start_timestamp_ms
+                ),
+                "end_timestamp_ms": max(previous.end_timestamp_ms, event.end_timestamp_ms),
+                "vehicle_detection_count": (
+                    previous.vehicle_detection_count + event.vehicle_detection_count
+                ),
+                "plate_detection_count": combined_plate_count,
+                "quality_flags": sorted(flags),
+            }
+        )
+    return unique_events
+
+
+def _load_results(job_id: uuid.UUID, session: Session) -> tuple[ProcessingJob, list[EventResult]]:
+    job = session.get(ProcessingJob, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+    tracks = list(
+        session.scalars(
+            select(Track)
+            .where(Track.job_id == job.id, Track.object_type == "VEHICLE")
+            .order_by(Track.start_timestamp_ms)
+        ).all()
+    )
+    events: list[EventResult] = []
+    for track in tracks:
+        detections = list(
+            session.scalars(
+                select(Detection).where(Detection.job_id == job.id, Detection.track_id == track.id)
+            ).all()
+        )
+        vehicle = next((item for item in detections if item.object_type == "VEHICLE"), None)
+        plate = next((item for item in detections if item.object_type == "PLATE"), None)
+        if vehicle is None:
+            continue
+        recognition = session.scalar(
+            select(RecognitionResult)
+            .where(
+                RecognitionResult.job_id == job.id,
+                RecognitionResult.track_id == track.id,
+                RecognitionResult.stage == "TRACK_VOTE",
+            )
+            .order_by(RecognitionResult.created_at.desc())
+        )
+        selected = plate or vehicle
+        full_frame = session.get(Artifact, selected.full_frame_artifact_id)
+        vehicle_crop = session.get(Artifact, vehicle.crop_artifact_id)
+        plate_crop = session.get(Artifact, plate.crop_artifact_id) if plate else None
+        if full_frame is None or vehicle_crop is None:
+            continue
+        raw = vehicle.raw_output or {}
+        events.append(
+            EventResult(
+                track_id=track.id,
+                track_code=track.track_code,
+                classification=track.classification or "UNREADABLE",
+                normalized_plate=recognition.normalized_text if recognition else None,
+                raw_plate=recognition.predicted_text if recognition else None,
+                confidence=recognition.confidence if recognition else None,
+                start_timestamp_ms=track.start_timestamp_ms,
+                end_timestamp_ms=track.end_timestamp_ms,
+                best_timestamp_ms=selected.timestamp_ms,
+                best_frame_number=selected.frame_number,
+                vehicle_bbox=(
+                    vehicle.bbox_x1,
+                    vehicle.bbox_y1,
+                    vehicle.bbox_x2,
+                    vehicle.bbox_y2,
+                ),
+                plate_bbox=(
+                    (plate.bbox_x1, plate.bbox_y1, plate.bbox_x2, plate.bbox_y2) if plate else None
+                ),
+                vehicle_confidence=vehicle.detection_confidence,
+                plate_confidence=plate.detection_confidence if plate else None,
+                vehicle_detection_count=int(raw.get("vehicle_detection_count", 1)),
+                plate_detection_count=int(raw.get("plate_detection_count", 0)),
+                quality_score=selected.quality_score,
+                quality_flags=list(raw.get("quality_flags", [])),
+                full_frame_url=_artifact_url(job.id, full_frame),
+                vehicle_crop_url=_artifact_url(job.id, vehicle_crop),
+                plate_crop_url=_artifact_url(job.id, plate_crop) if plate_crop else None,
+            )
+        )
+    postprocess = (job.config_snapshot or {}).get("postprocess")
+    return job, _merge_persisted_motion_candidates(events) if postprocess else events
+
+
+@router.get("/{job_id}/results", response_model=ResultList)
+def get_results(job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)]) -> ResultList:
+    job, events = _load_results(job_id, session)
+    counts = {name: 0 for name in ("RECOGNIZED", "LOW_CONFIDENCE", "UNREADABLE", "NO_PLATE")}
+    for event in events:
+        counts[event.classification] = counts.get(event.classification, 0) + 1
+    return ResultList(
+        job_id=job.id,
+        source_name=job.source_name,
+        status=job.status,
+        total=len(events),
+        counts=counts,
+        events=events,
+    )
+
+
+@router.get("/{job_id}/export.csv")
+def export_results_csv(
+    job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)]
+) -> StreamingResponse:
+    job, events = _load_results(job_id, session)
+    output = io.StringIO()
+    output.write("\ufeff")  # Excel opens UTF-8 Vietnamese text correctly.
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "stt",
+            "track_id",
+            "classification",
+            "normalized_plate",
+            "raw_ocr",
+            "start_timestamp_ms",
+            "end_timestamp_ms",
+            "best_timestamp_ms",
+            "best_frame_number",
+            "vehicle_confidence",
+            "plate_detection_confidence",
+            "ocr_vote_confidence",
+            "vehicle_detection_count",
+            "plate_detection_count",
+            "quality_score",
+            "quality_flags",
+            "full_frame_evidence",
+            "vehicle_crop_evidence",
+            "plate_crop_evidence",
+            "pipeline_version",
+        ]
+    )
+    for index, event in enumerate(events, start=1):
+        writer.writerow(
+            [
+                index,
+                event.track_code,
+                event.classification,
+                event.normalized_plate or "",
+                event.raw_plate or "",
+                event.start_timestamp_ms,
+                event.end_timestamp_ms,
+                event.best_timestamp_ms,
+                event.best_frame_number,
+                event.vehicle_confidence,
+                event.plate_confidence or "",
+                event.confidence or "",
+                event.vehicle_detection_count,
+                event.plate_detection_count,
+                event.quality_score or "",
+                "|".join(event.quality_flags),
+                event.full_frame_url,
+                event.vehicle_crop_url,
+                event.plate_crop_url or "",
+                job.pipeline_version or "motorcycle-alpr-v4",
+            ]
+        )
+    filename = f"{_path_safe(job.source_name)}_motorcycle_events.csv"
+    return StreamingResponse(
+        iter([output.getvalue().encode("utf-8")]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _path_safe(name: str) -> str:
+    stem = name.rsplit(".", 1)[0]
+    return "".join(
+        character if character.isalnum() or character in "-_" else "_" for character in stem
+    )[:100]

@@ -46,7 +46,9 @@ class Detection(UUIDPrimaryKeyMixin, Base):
             name="fk_detections_crop_same_job",
             ondelete="RESTRICT",
         ),
-        CheckConstraint("object_type IN ('PLATE', 'FACE')", name="ck_detections_object_type"),
+        CheckConstraint(
+            "object_type IN ('VEHICLE', 'PLATE', 'FACE')", name="ck_detections_object_type"
+        ),
         CheckConstraint("source IN ('MODEL', 'MANUAL')", name="ck_detections_source"),
         CheckConstraint("frame_number >= 0", name="ck_detections_frame_nonnegative"),
         CheckConstraint("timestamp_ms >= 0", name="ck_detections_time_nonnegative"),

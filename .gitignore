@@ -32,6 +32,9 @@ models/*
 *.jpeg
 *.png
 !docs/**/*.png
+!frontend/public/brand/datvisiongt-original.png
+!frontend/public/brand/datvisiongt-symbol-original.png
+!frontend/public/brand/datvisiongt-wordmark-original.png
 
 # IDE / OS
 .idea/

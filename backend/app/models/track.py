@@ -32,7 +32,9 @@ class Track(UUIDPrimaryKeyMixin, Base):
             name="fk_tracks_duplicate_same_job",
             ondelete="RESTRICT",
         ),
-        CheckConstraint("object_type IN ('PLATE', 'FACE')", name="ck_tracks_object_type"),
+        CheckConstraint(
+            "object_type IN ('VEHICLE', 'PLATE', 'FACE')", name="ck_tracks_object_type"
+        ),
         CheckConstraint(
             "status IN ('OPEN', 'CLOSED', 'READY_FOR_REVIEW', 'DISCARDED')",
             name="ck_tracks_status",
@@ -66,7 +68,7 @@ class Track(UUIDPrimaryKeyMixin, Base):
     )
     track_code: Mapped[str] = mapped_column(String(64), nullable=False)
     object_type: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="PLATE", server_default="PLATE"
+        String(16), nullable=False, default="VEHICLE", server_default="VEHICLE"
     )
     start_frame: Mapped[int] = mapped_column(BigInteger, nullable=False)
     end_frame: Mapped[int] = mapped_column(BigInteger, nullable=False)

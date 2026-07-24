@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0",
+  "pipeline_version": "motorcycle-alpr-v4",
+  "runtime": {
+    "default": "onnxruntime-cpu",
+    "optional_linux_intel_profile": "onnxruntime-openvino",
+    "workers": 1
+  },
+  "models": {
+    "vehicle_detector": {
+      "name": "yolox-tiny",
+      "format": "ONNX",
+      "purpose": "motorcycle event detection, including NO_PLATE",
+      "license": "Apache-2.0",
+      "path": "vehicle/yolox_tiny.onnx"
+    },
+    "plate_detector": {
+      "name": "yolo-v9-t-512-license-plate-end2end",
+      "format": "ONNX",
+      "source": "open-image-models",
+      "license": "MIT",
+      "path": "plate-detector/yolo-v9-t-512-license-plates-end2end.onnx"
+    },
+    "plate_ocr": {
+      "name": "cct-xs-v2-global-model",
+      "format": "ONNX",
+      "source": "fast-plate-ocr",
+      "license": "MIT",
+      "path": "plate-ocr/model.onnx",
+      "config_path": "plate-ocr/plate_config.yaml"
+    }
+  }
+}

@@ -1,5 +1,16 @@
 # DatVision GT
 
+## Current MVP: xe máy qua trạm, camera phía sau
+
+Luồng đang triển khai thật là: upload video -> phát hiện xe máy -> tracking từng lượt xe -> phát
+hiện biển -> OCR nhiều frame -> voting -> lưu PostgreSQL -> xuất danh sách mở được bằng Excel.
+Mỗi lượt xe có một record dự thảo, gồm cả `NO_PLATE`, `UNREADABLE` và `LOW_CONFIDENCE`; hệ thống
+không chỉ xuất các biển đọc được. Motion-only được giữ làm candidate kiểm duyệt chứ không tự động
+kết luận xe không biển. Model mặc định là YOLOX-tiny (xe máy), YOLOv9-T-512 từ open-image-models
+(biển) và CCT-XS-v2 từ fast-plate-ocr (OCR), chạy ONNX Runtime CPU.
+
+Hướng dẫn kỹ thuật và deploy: [`docs/16-motorcycle-alpr-mvp.md`](docs/16-motorcycle-alpr-mvp.md).
+
 <p align="center">
   <strong>Ground Truth Generation & Verification Platform</strong>
 </p>
@@ -70,11 +81,10 @@ Hệ thống tạo:
 
 Phần này giúp dev clone repository, setup môi trường và chạy được toàn bộ codebase.
 
-> **Trạng thái triển khai hiện tại:** repository đã có Phase 0 theo hướng **plate-first**.
-> Backend, RQ worker, PostgreSQL, Redis và React/Caddy đã chạy được bằng Docker Compose;
-> detector/OCR, upload, authentication và review workflow chưa được tích hợp. Hướng dẫn đang chạy
-> thực tế nằm tại `docs/00-getting-started.md`. Các mục chưa được implement bên dưới được giữ lại
-> như target specification, không phải command đã sẵn sàng.
+> **Trạng thái triển khai hiện tại:** vertical slice MVP đã chạy end-to-end cho video xe máy:
+> upload/probe, evidence 4 FPS, detector xe/biển, OCR, tracking/vote, PostgreSQL, API kết quả và
+> Excel-compatible CSV. Review hiện là read-only; xác nhận/sửa GT Final và authentication vẫn là
+> phần tiếp theo. Hướng dẫn đang chạy thực tế nằm tại `docs/00-getting-started.md`.
 
 ## 2.1. Yêu cầu hệ thống
 

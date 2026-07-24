@@ -1,63 +1,125 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-type Health = {
-  status: string;
-  database: string;
-  redis: string;
-  storage: string;
-};
+import { AppLayout } from "./components/AppLayout";
+import { ErrorState, LoadingState } from "./components/ui";
+import { api } from "./lib/api";
+import { isReadyForReview } from "./lib/format";
+import { CreateJobPage } from "./pages/CreateJobPage";
+import { ExportsPage } from "./pages/ExportsPage";
+import { OverviewPage } from "./pages/OverviewPage";
+import { ProcessingPage } from "./pages/ProcessingPage";
+import { ReviewPage } from "./pages/ReviewPage";
+import type { Health, Job, View } from "./types";
 
 export default function App() {
+  const [view, setView] = useState<View>("create");
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadingJobs, setLoadingJobs] = useState(true);
+  const [jobsError, setJobsError] = useState("");
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
-    fetch("/api/v1/health")
-      .then(async (response) => {
-        const body = (await response.json()) as Health;
-        if (!response.ok) throw new Error(`Health check returned ${response.status}`);
-        return body;
+    api<Job[]>("/api/v1/jobs")
+      .then((payload) => {
+        setJobs(payload);
+        setSelectedJob((current) => {
+          if (current) return payload.find((job) => job.id === current.id) ?? payload[0] ?? null;
+          return payload[0] ?? null;
+        });
       })
-      .then(setHealth)
-      .catch((reason: unknown) => {
-        setError(reason instanceof Error ? reason.message : "Không thể kết nối backend");
-      });
+      .catch((reason: unknown) =>
+        setJobsError(reason instanceof Error ? reason.message : "Không thể tải danh sách job."),
+      )
+      .finally(() => setLoadingJobs(false));
+  }, [reloadToken]);
+
+  useEffect(() => {
+    api<Health>("/api/v1/health").then(setHealth).catch(() => setHealth(null));
   }, []);
 
-  return (
-    <main className="shell">
-      <section className="card">
-        <p className="eyebrow">GROUND TRUTH PLATFORM</p>
-        <h1>DatVision GT</h1>
-        <p className="lead">Plate-first evidence pipeline</p>
+  const upsertJob = useCallback((updated: Job) => {
+    setSelectedJob(updated);
+    setJobs((current) => [
+      updated,
+      ...current.filter((candidate) => candidate.id !== updated.id),
+    ]);
+  }, []);
 
-        {health && (
-          <div className="status success">
-            Hệ thống sẵn sàng · PostgreSQL {health.database} · Redis {health.redis}
-          </div>
-        )}
-        {!health && !error && <div className="status">Đang kiểm tra hệ thống…</div>}
-        {error && <div className="status error">Backend chưa sẵn sàng: {error}</div>}
+  function openJob(job: Job) {
+    setSelectedJob(job);
+    setView(isReadyForReview(job) ? "review" : "processing");
+  }
 
-        <div className="grid">
-          <article>
-            <span>01</span>
-            <h2>Evidence baseline</h2>
-            <p>Video, frame, timestamp và crop có thể truy vết.</p>
-          </article>
-          <article>
-            <span>02</span>
-            <h2>Plate pipeline</h2>
-            <p>Detector và OCR được cắm qua interface độc lập.</p>
-          </article>
-          <article>
-            <span>03</span>
-            <h2>Human review</h2>
-            <p>Model chỉ tạo draft; người dùng xác nhận GT cuối.</p>
-          </article>
-        </div>
+  function navigate(next: Exclude<View, "processing">) {
+    if (next === "review" && !selectedJob) return;
+    setView(next);
+  }
+
+  function reloadJobs() {
+    setLoadingJobs(true);
+    setJobsError("");
+    setReloadToken((value) => value + 1);
+  }
+
+  let content;
+  if (view === "overview") {
+    if (loadingJobs) {
+      content = (
+        <section className="page">
+          <LoadingState label="Đang tải danh sách job…" />
+        </section>
+      );
+    } else if (jobsError) {
+      content = (
+        <section className="page">
+          <ErrorState message={jobsError} onRetry={reloadJobs} />
+        </section>
+      );
+    } else {
+      content = (
+        <OverviewPage jobs={jobs} onCreate={() => setView("create")} onOpen={openJob} />
+      );
+    }
+  } else if (view === "create") {
+    content = (
+      <CreateJobPage
+        onDraftSaved={upsertJob}
+        onStarted={(job) => {
+          upsertJob(job);
+          setView("processing");
+        }}
+      />
+    );
+  } else if (view === "processing" && selectedJob) {
+    content = (
+      <ProcessingPage
+        job={selectedJob}
+        onReview={() => setView("review")}
+        onUpdate={upsertJob}
+      />
+    );
+  } else if (view === "review" && selectedJob) {
+    content = <ReviewPage job={selectedJob} key={selectedJob.id} />;
+  } else if (view === "exports") {
+    content = <ExportsPage jobs={jobs} onOpen={openJob} />;
+  } else {
+    content = (
+      <section className="page">
+        <ErrorState message="Chưa chọn job để mở màn hình này." />
       </section>
-    </main>
+    );
+  }
+
+  return (
+    <AppLayout
+      health={health}
+      job={selectedJob}
+      onNavigate={navigate}
+      view={view}
+    >
+      {content}
+    </AppLayout>
   );
 }
-

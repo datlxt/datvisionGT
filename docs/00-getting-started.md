@@ -48,5 +48,14 @@ storage/
 models/
 ```
 
-The sample video may stay outside Git. In a later phase the upload API will copy it into a
-job-specific storage directory and record its SHA-256 hash.
+The upload API writes each video into a job-specific directory, probes it with PyAV, and records
+its SHA-256 hash before the job can be queued.
+
+## Evidence and benchmark smoke test
+
+The timestamp-aware evidence extractor and model-neutral benchmark workflow are documented in
+[`15-evidence-and-benchmark.md`](15-evidence-and-benchmark.md). Run the limited 20-frame smoke test
+there before extracting a full video or integrating a detector.
+
+The executable motorcycle ALPR design, model provisioning, `NO_PLATE` rule, APIs, and deployment
+profile are documented in [`16-motorcycle-alpr-mvp.md`](16-motorcycle-alpr-mvp.md).

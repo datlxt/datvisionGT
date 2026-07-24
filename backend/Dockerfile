@@ -2,12 +2,19 @@ FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=10 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
 COPY requirements.txt requirements-dev.txt requirements.lock.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.lock.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    for attempt in 1 2 3 4 5; do \
+        pip install --retries 10 --timeout 120 -r requirements.lock.txt && exit 0; \
+        if [ "$attempt" -eq 5 ]; then exit 1; fi; \
+        echo "pip download interrupted; retrying dependency install ($attempt/5)"; \
+    done
 
 COPY alembic.ini ./
 COPY pyproject.toml ./

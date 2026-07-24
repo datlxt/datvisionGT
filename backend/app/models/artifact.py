@@ -26,7 +26,7 @@ class Artifact(UUIDPrimaryKeyMixin, Base):
         UniqueConstraint("job_id", "id", name="uq_artifacts_job_id_id"),
         UniqueConstraint("job_id", "storage_key", name="uq_artifact_job_storage_key"),
         CheckConstraint(
-            "kind IN ('SOURCE_VIDEO', 'SOURCE_IMAGE', 'FULL_FRAME', 'PLATE_CROP', "
+            "kind IN ('SOURCE_VIDEO', 'SOURCE_IMAGE', 'FULL_FRAME', 'VEHICLE_CROP', 'PLATE_CROP', "
             "'THUMBNAIL', 'EXPORT_XLSX', 'EXPORT_CSV', 'EXPORT_ZIP', 'LOG')",
             name="ck_artifact_kind",
         ),

@@ -86,7 +86,7 @@ class ProcessingJob(UUIDPrimaryKeyMixin, Base):
     )
     object_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="PLATE")
     processing_mode: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="HIGH_RECALL", server_default="HIGH_RECALL"
+        String(16), nullable=False, default="BALANCED", server_default="BALANCED"
     )
     sample_rate: Mapped[float] = mapped_column(
         Float, nullable=False, default=4.0, server_default="4.0"

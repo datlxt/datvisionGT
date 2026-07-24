@@ -66,7 +66,7 @@ class ModelVersion(UUIDPrimaryKeyMixin, Base):
     __table_args__ = (
         UniqueConstraint("model_type", "name", "version", name="uq_model_identity"),
         CheckConstraint(
-            "model_type IN ('PLATE_DETECTOR', 'PLATE_OCR', 'PLATE_TRACKER', "
+            "model_type IN ('VEHICLE_DETECTOR', 'PLATE_DETECTOR', 'PLATE_OCR', 'PLATE_TRACKER', "
             "'FACE_DETECTOR', 'FACE_RECOGNIZER', 'FACE_TRACKER')",
             name="ck_model_type",
         ),
@@ -100,7 +100,10 @@ class JobModel(Base):
     __tablename__ = "job_models"
     __table_args__ = (
         UniqueConstraint("job_id", "role", name="uq_job_model_role"),
-        CheckConstraint("role IN ('DETECTOR', 'OCR', 'TRACKER')", name="ck_job_model_role"),
+        CheckConstraint(
+            "role IN ('VEHICLE_DETECTOR', 'PLATE_DETECTOR', 'OCR', 'TRACKER')",
+            name="ck_job_model_role",
+        ),
     )
 
     job_id: Mapped[uuid.UUID] = mapped_column(
@@ -111,7 +114,7 @@ class JobModel(Base):
         ForeignKey("model_versions.id", ondelete="RESTRICT"),
         primary_key=True,
     )
-    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
