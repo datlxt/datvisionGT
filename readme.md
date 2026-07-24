@@ -11,6 +11,9 @@ kết luận xe không biển. Model mặc định là YOLOX-tiny (xe máy), YOL
 
 Hướng dẫn kỹ thuật và deploy: [`docs/16-motorcycle-alpr-mvp.md`](docs/16-motorcycle-alpr-mvp.md).
 
+Quy ước Ground Truth Lane 9 và cấu trúc Excel `Plate Report` 9 cột:
+[`docs/18-lane9-gt-export-contract.md`](docs/18-lane9-gt-export-contract.md).
+
 <p align="center">
   <strong>Ground Truth Generation & Verification Platform</strong>
 </p>

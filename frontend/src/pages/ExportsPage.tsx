@@ -27,10 +27,10 @@ export function ExportsPage({
       <div className="export-notice card">
         <Icon name="database" size={22} />
         <div>
-          <strong>Hiện backend hỗ trợ export kết quả model dạng CSV.</strong>
+          <strong>Backend hỗ trợ export kết quả model dạng CSV và Excel (Plate Report).</strong>
           <p>
-            GT Draft/GT Final và lịch sử export chưa có API tương ứng nên không được giả lập trên
-            giao diện.
+            File Excel theo đúng format kiểm duyệt: ảnh crop biển số nhúng sẵn, cột GT Plate và Kết
+            quả QA để reviewer điền. GT Final tổng hợp chưa có API tương ứng.
           </p>
         </div>
       </div>
@@ -83,12 +83,20 @@ export function ExportsPage({
                     <td>{formatDate(job.updated_at)}</td>
                     <td>
                       {isReadyForReview(job) ? (
-                        <a
-                          className="button button-secondary button-compact"
-                          href={`/api/v1/jobs/${job.id}/export.csv`}
-                        >
-                          <Icon name="download" size={16} /> CSV
-                        </a>
+                        <div className="table-actions">
+                          <a
+                            className="button button-primary button-compact"
+                            href={`/api/v1/jobs/${job.id}/export.xlsx`}
+                          >
+                            <Icon name="download" size={16} /> Excel
+                          </a>
+                          <a
+                            className="button button-secondary button-compact"
+                            href={`/api/v1/jobs/${job.id}/export.csv`}
+                          >
+                            <Icon name="download" size={16} /> CSV
+                          </a>
+                        </div>
                       ) : (
                         <button
                           className="button button-secondary button-compact"

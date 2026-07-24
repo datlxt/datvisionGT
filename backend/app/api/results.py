@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -11,7 +12,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.session import get_db
+from app.export import PlateReportRow, build_plate_report_workbook, workbook_to_bytes
 from app.models import Artifact, Detection, ProcessingJob, RecognitionResult, Track
 
 router = APIRouter(prefix="/jobs", tags=["results"])
@@ -484,6 +487,50 @@ def export_results_csv(
     return StreamingResponse(
         iter([output.getvalue().encode("utf-8")]),
         media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _crop_path(job_id: uuid.UUID, crop_url: str | None) -> Path | None:
+    """Resolve a served crop URL back to its on-disk, job-scoped evidence file."""
+
+    if not crop_url:
+        return None
+    settings = get_settings()
+    root = settings.storage_root.resolve()
+    filename = Path(crop_url.rsplit("/", 1)[-1]).name
+    candidate = (root / "jobs" / str(job_id) / "crops" / filename).resolve()
+    if not candidate.is_relative_to(root) or not candidate.is_file():
+        return None
+    return candidate
+
+
+def _event_to_report_row(job_id: uuid.UUID, event: EventResult) -> PlateReportRow:
+    if event.classification == "NO_PLATE":
+        plate_text = "LPN_NO_PLATE_VEHICLE"
+    else:
+        plate_text = event.normalized_plate or ""
+    return PlateReportRow(
+        plate_text=plate_text,
+        start_ms=event.start_timestamp_ms,
+        end_ms=event.end_timestamp_ms,
+        frame_number=event.best_frame_number,
+        confidence=event.confidence,
+        crop_path=_crop_path(job_id, event.plate_crop_url),
+    )
+
+
+@router.get("/{job_id}/export.xlsx")
+def export_results_xlsx(
+    job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)]
+) -> StreamingResponse:
+    job, events = _load_results(job_id, session)
+    rows = [_event_to_report_row(job.id, event) for event in events]
+    payload = workbook_to_bytes(build_plate_report_workbook(rows))
+    filename = f"{_path_safe(job.source_name)}_plate_report.xlsx"
+    return StreamingResponse(
+        iter([payload]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

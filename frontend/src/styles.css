@@ -1143,6 +1143,23 @@ code {
   font-size: 9px;
 }
 
+.table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.gt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gt-actions > .button {
+  flex: 1;
+}
+
 .icon-button {
   display: grid;
   place-items: center;

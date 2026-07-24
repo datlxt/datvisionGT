@@ -109,6 +109,10 @@ The official Excel GT is used only after inference to match events by timestamp/
 event recall, precision, exact plate accuracy, character error rate, duplicate rate and missed
 events. It is never passed to a detector or OCR model during inference.
 
+The authoritative Lane 9 GT and compact `Plate Report` export schema are documented in
+[`18-lane9-gt-export-contract.md`](18-lane9-gt-export-contract.md). Claude and other coding agents
+must read that contract before changing GT, review, or export behavior.
+
 ## Current video smoke result
 
 Pipeline `motorcycle-alpr-v2` completed the supplied 612.48-second, 1280x720, 25 FPS video:

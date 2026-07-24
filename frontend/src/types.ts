@@ -72,6 +72,37 @@ export type ResultList = {
   events: EventResult[];
 };
 
+export type VerifyStatus = "UNVERIFIED" | "IN_REVIEW" | "VERIFIED" | "DISCARDED";
+
+export type GroundTruthRecord = {
+  id: string;
+  track_id: string;
+  record_code: string;
+  record_source: string;
+  predicted_text: string | null;
+  prediction_confidence: number | null;
+  gt_text: string | null;
+  normalized_gt_text: string | null;
+  classification: string | null;
+  verify_status: VerifyStatus;
+  evidence_status: string;
+  is_duplicate: boolean;
+  duplicate_of_id: string | null;
+  note: string | null;
+  quality_flags: string[];
+  version: number;
+};
+
+export type GroundTruthItem = { record: GroundTruthRecord; event: EventResult | null };
+
+export type GroundTruthList = {
+  job_id: string;
+  status: JobStatus;
+  total: number;
+  counts: Record<string, number>;
+  items: GroundTruthItem[];
+};
+
 export type Health = {
   status: "ok" | "degraded";
   database: string;

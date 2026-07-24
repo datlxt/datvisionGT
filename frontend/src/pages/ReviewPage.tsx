@@ -14,7 +14,38 @@ import {
   isSuspectedNoPlate,
   resultLabel,
 } from "../lib/format";
-import type { EventResult, Job, ResultList } from "../types";
+import type {
+  EventResult,
+  GroundTruthList,
+  GroundTruthRecord,
+  Job,
+  ResultList,
+} from "../types";
+
+const VERIFY_LABEL: Record<GroundTruthRecord["verify_status"], string> = {
+  UNVERIFIED: "Chưa kiểm duyệt",
+  IN_REVIEW: "Đang xem",
+  VERIFIED: "Đã xác nhận",
+  DISCARDED: "Đã loại",
+};
+
+function verifyTone(status: GroundTruthRecord["verify_status"]) {
+  if (status === "VERIFIED") return "success" as const;
+  if (status === "DISCARDED") return "duplicate" as const;
+  return "neutral" as const;
+}
+
+function patchGt(recordId: string, body: Record<string, unknown>) {
+  return api<GroundTruthRecord>(`/api/v1/ground-truth/${recordId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+function actionGt(recordId: string, action: "verify" | "discard" | "restore") {
+  return api<GroundTruthRecord>(`/api/v1/ground-truth/${recordId}/${action}`, { method: "POST" });
+}
 
 type Filter = "ALL" | "RECOGNIZED" | "REVIEW" | "NO_PLATE";
 
@@ -65,6 +96,8 @@ export function ReviewPage({ job }: { job: Job }) {
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
+  const [gt, setGt] = useState<GroundTruthList | null>(null);
+  const [gtReload, setGtReload] = useState(0);
 
   useEffect(() => {
     api<ResultList>(`/api/v1/jobs/${job.id}/results`)
@@ -76,6 +109,18 @@ export function ReviewPage({ job }: { job: Job }) {
         setError(reason instanceof Error ? reason.message : "Không thể tải kết quả."),
       );
   }, [job.id, reloadToken]);
+
+  useEffect(() => {
+    api<GroundTruthList>(`/api/v1/jobs/${job.id}/ground-truth`)
+      .then(setGt)
+      .catch(() => setGt(null));
+  }, [job.id, gtReload]);
+
+  const gtByTrack = useMemo(() => {
+    const map = new Map<string, GroundTruthRecord>();
+    gt?.items.forEach((item) => map.set(item.record.track_id, item.record));
+    return map;
+  }, [gt]);
 
   const filteredEvents = useMemo(() => {
     if (!results) return [];
@@ -105,6 +150,7 @@ export function ReviewPage({ job }: { job: Job }) {
   const selectedIndex = selected
     ? filteredEvents.findIndex((event) => event.track_id === selected.track_id)
     : -1;
+  const selectedGt = selected ? gtByTrack.get(selected.track_id) ?? null : null;
   const suspected = results?.events.filter(isSuspectedNoPlate).length ?? 0;
 
   if (error) {
@@ -133,9 +179,14 @@ export function ReviewPage({ job }: { job: Job }) {
     <section className="page review-page">
       <PageHeader
         action={
-          <a className="button button-secondary" href={`/api/v1/jobs/${job.id}/export.csv`}>
-            <Icon name="download" size={18} /> Export kết quả model CSV
-          </a>
+          <div className="table-actions">
+            <a className="button button-primary" href={`/api/v1/jobs/${job.id}/export.xlsx`}>
+              <Icon name="download" size={18} /> Export Excel (Plate Report)
+            </a>
+            <a className="button button-secondary" href={`/api/v1/jobs/${job.id}/export.csv`}>
+              <Icon name="download" size={18} /> CSV
+            </a>
+          </div>
         }
         description={`${results.total} case model · ${results.counts.RECOGNIZED ?? 0} đọc được · ${
           results.counts.NO_PLATE ?? 0
@@ -335,42 +386,11 @@ export function ReviewPage({ job }: { job: Job }) {
               )}
             </section>
 
-            <section className="ground-truth-section">
-              <div className="panel-section-title">
-                <div>
-                  <span>Ground Truth</span>
-                  <h2>Kiểm duyệt của con người</h2>
-                </div>
-                <StatusBadge>Chưa có API</StatusBadge>
-              </div>
-              <label>
-                GT Plate
-                <input disabled placeholder="Chưa có dữ liệu" />
-              </label>
-              <label>
-                Classification
-                <select disabled defaultValue="">
-                  <option value="">Chưa có dữ liệu</option>
-                </select>
-              </label>
-              <label>
-                Verify status
-                <select disabled defaultValue="">
-                  <option value="">Chưa có dữ liệu</option>
-                </select>
-              </label>
-              <label>
-                Ghi chú kiểm duyệt
-                <textarea disabled placeholder="Backend chưa có endpoint ghi Ground Truth" />
-              </label>
-              <button className="button button-primary button-block" disabled type="button">
-                <Icon name="check" size={18} /> Xác nhận GT
-              </button>
-              <p className="backend-note">
-                Database đã có Ground Truth schema nhưng ứng dụng chưa có API đọc/ghi record kiểm
-                duyệt. UI không gửi dữ liệu giả.
-              </p>
-            </section>
+            <GtPanel
+              key={selected.track_id}
+              record={selectedGt}
+              onChanged={() => setGtReload((value) => value + 1)}
+            />
 
             <footer className="review-navigation">
               <button
@@ -398,6 +418,122 @@ export function ReviewPage({ job }: { job: Job }) {
           />
         </div>
       )}
+    </section>
+  );
+}
+
+function GtPanel({
+  record,
+  onChanged,
+}: {
+  record: GroundTruthRecord | null;
+  onChanged: () => void;
+}) {
+  const [gtText, setGtText] = useState(record?.gt_text ?? record?.predicted_text ?? "");
+  const [note, setNote] = useState(record?.note ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  if (!record) {
+    return (
+      <section className="ground-truth-section">
+        <div className="panel-section-title">
+          <div>
+            <span>Ground Truth</span>
+            <h2>Kiểm duyệt của con người</h2>
+          </div>
+        </div>
+        <p className="backend-note">Đang tạo GT draft cho track này…</p>
+      </section>
+    );
+  }
+
+  const run = (task: () => Promise<unknown>) => {
+    setBusy(true);
+    setError("");
+    task()
+      .then(() => onChanged())
+      .catch((reason: unknown) =>
+        setError(reason instanceof Error ? reason.message : "Không lưu được kiểm duyệt."),
+      )
+      .finally(() => setBusy(false));
+  };
+
+  const save = () => run(() => patchGt(record.id, { gt_text: gtText, note }));
+  const verify = () =>
+    run(async () => {
+      await patchGt(record.id, { gt_text: gtText, note });
+      await actionGt(record.id, "verify");
+    });
+  const discard = () => run(() => actionGt(record.id, "discard"));
+  const restore = () => run(() => actionGt(record.id, "restore"));
+
+  const isDiscarded = record.verify_status === "DISCARDED";
+  const isVerified = record.verify_status === "VERIFIED";
+
+  return (
+    <section className="ground-truth-section">
+      <div className="panel-section-title">
+        <div>
+          <span>Ground Truth</span>
+          <h2>Kiểm duyệt của con người</h2>
+        </div>
+        <StatusBadge tone={verifyTone(record.verify_status)}>
+          {VERIFY_LABEL[record.verify_status]}
+        </StatusBadge>
+      </div>
+      <label>
+        GT Plate
+        <input
+          onChange={(event) => setGtText(event.target.value.toUpperCase())}
+          placeholder="Nhập biển số đúng"
+          value={gtText}
+        />
+      </label>
+      <label>
+        Ghi chú kiểm duyệt
+        <textarea
+          onChange={(event) => setNote(event.target.value)}
+          placeholder="Ghi chú (tuỳ chọn)"
+          value={note}
+        />
+      </label>
+      {error && <p className="backend-note">{error}</p>}
+      <div className="gt-actions">
+        <button className="button button-secondary" disabled={busy} onClick={save} type="button">
+          Lưu nháp
+        </button>
+        {isDiscarded ? (
+          <button
+            className="button button-secondary"
+            disabled={busy}
+            onClick={restore}
+            type="button"
+          >
+            Khôi phục
+          </button>
+        ) : (
+          <button
+            className="button button-secondary"
+            disabled={busy}
+            onClick={discard}
+            type="button"
+          >
+            Loại (Discard)
+          </button>
+        )}
+      </div>
+      <button
+        className="button button-primary button-block"
+        disabled={busy || isVerified || !gtText.trim()}
+        onClick={verify}
+        type="button"
+      >
+        <Icon name="check" size={18} /> {isVerified ? "Đã xác nhận" : "Xác nhận GT"}
+      </button>
+      <p className="backend-note">
+        Predicted: {record.predicted_text ?? "—"} · v{record.version} · reviewer mặc định.
+      </p>
     </section>
   );
 }

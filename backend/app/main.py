@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.evidence import router as evidence_router
+from app.api.ground_truth import router as ground_truth_router
 from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
 from app.api.results import router as results_router
@@ -35,6 +36,7 @@ app.include_router(health_router, prefix="/api/v1")
 app.include_router(evidence_router, prefix="/api/v1")
 app.include_router(jobs_router, prefix="/api/v1")
 app.include_router(results_router, prefix="/api/v1")
+app.include_router(ground_truth_router, prefix="/api/v1")
 
 
 @app.get("/", include_in_schema=False)
