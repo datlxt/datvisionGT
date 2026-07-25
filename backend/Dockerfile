@@ -23,6 +23,14 @@ COPY app ./app
 COPY scripts ./scripts
 COPY tests ./tests
 
+# Bake the pinned, checksum-verified ONNX models into the image so the runtime is
+# self-contained: no network access and no manual model provisioning at deploy time.
+# Skippable for offline image builds via `--build-arg BAKE_MODELS=0` (then mount ./models).
+ARG BAKE_MODELS=1
+RUN if [ "$BAKE_MODELS" = "1" ]; then \
+        python scripts/provision_models.py --model-root /app/models; \
+    fi
+
 RUN mkdir -p /app/storage/uploads /app/storage/jobs /app/storage/exports /app/models \
     && useradd --create-home --uid 10001 appuser \
     && chown -R appuser:appuser /app

@@ -113,7 +113,6 @@ def _merge_persisted_motion_candidates(
     events: list[EventResult],
     *,
     max_gap_ms: int = 1_250,
-    no_plate_gap_ms: int = 20_000,
     min_no_plate_detections: int = 5,
 ) -> list[EventResult]:
     """Keep API/CSV at one review case when MOG2 produced adjacent fragments."""
@@ -124,12 +123,11 @@ def _merge_persisted_motion_candidates(
             event.classification == "NO_PLATE"
             and event.vehicle_detection_count < min_no_plate_detections
         ):
+            # A short no-plate pass stays a visible NO_PLATE case (contract rule #5);
+            # only flag the weaker evidence so the reviewer can judge it.
             event = event.model_copy(
                 update={
-                    "classification": "UNREADABLE",
-                    "quality_flags": sorted(
-                        {*event.quality_flags, "INSUFFICIENT_NO_PLATE_EVIDENCE"}
-                    ),
+                    "quality_flags": sorted({*event.quality_flags, "LOW_EVIDENCE_NO_PLATE"}),
                 }
             )
         reviewed_events.append(event)
@@ -203,8 +201,9 @@ def _merge_persisted_motion_candidates(
                 index
                 for index in range(len(deduplicated) - 1, -1, -1)
                 if deduplicated[index].classification == "NO_PLATE"
-                and event.start_timestamp_ms - deduplicated[index].end_timestamp_ms
-                <= no_plate_gap_ms
+                # Only merge concurrently-active fragments of one vehicle; keep sequential
+                # passes as separate cases so no distinct no-plate motorcycle is lost.
+                and event.start_timestamp_ms <= deduplicated[index].end_timestamp_ms
                 and _bbox_iou(event.vehicle_bbox, deduplicated[index].vehicle_bbox) >= 0.5
             ),
             None,

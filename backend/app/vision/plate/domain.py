@@ -153,16 +153,18 @@ def finalize_vehicle_track(
         semantic_vehicle_observations = sum(
             item.vehicle_label == "motorcycle" for item in track.observations
         )
-        if semantic_vehicle_observations >= min_no_plate_observations:
-            classification = EventClassification.NO_PLATE
-        else:
+        if semantic_vehicle_observations == 0:
+            # Pure motion (MOG2) with no semantic vehicle detection is a review candidate
+            # that must not be auto-published as a confirmed vehicle event.
             classification = EventClassification.UNREADABLE
-            flags.append(
-                "MOTION_ONLY_NO_PLATE_CANDIDATE"
-                if semantic_vehicle_observations == 0
-                and len(track.observations) >= min_no_plate_observations
-                else "INSUFFICIENT_VEHICLE_OBSERVATIONS_FOR_NO_PLATE"
-            )
+            flags.append("MOTION_ONLY_NO_PLATE_CANDIDATE")
+        else:
+            # A real vehicle without a plate is still an event (contract rule #5). A short
+            # pass is kept and flagged so the reviewer can judge the weaker evidence,
+            # instead of being silently dropped from the list.
+            classification = EventClassification.NO_PLATE
+            if semantic_vehicle_observations < min_no_plate_observations:
+                flags.append("LOW_EVIDENCE_NO_PLATE")
         normalized = raw = None
         confidence = None
         best = max(
@@ -282,7 +284,6 @@ def consolidate_vehicle_events(
     events: list[VehicleEventResult],
     *,
     same_plate_gap_ms: int = 5_000,
-    same_no_plate_gap_ms: int = 20_000,
     near_plate_gap_ms: int = 1_500,
 ) -> list[VehicleEventResult]:
     """Merge split vehicle tracks and publish only evidence-backed events."""
@@ -355,8 +356,10 @@ def consolidate_vehicle_events(
                 index
                 for index in range(len(no_plate_merged) - 1, -1, -1)
                 if no_plate_merged[index].classification == EventClassification.NO_PLATE
-                and event.start_timestamp_ms - no_plate_merged[index].end_timestamp_ms
-                <= same_no_plate_gap_ms
+                # Merge only concurrently-active tracks of the same vehicle (true double
+                # tracking). Sequential passes at the same lane spot stay separate cases,
+                # so distinct no-plate motorcycles are never collapsed into one.
+                and event.start_timestamp_ms <= no_plate_merged[index].end_timestamp_ms
                 and bbox_iou(
                     event.best_observation.vehicle_bbox,
                     no_plate_merged[index].best_observation.vehicle_bbox,
@@ -408,9 +411,6 @@ def consolidate_vehicle_events(
     ]
     consolidated: list[VehicleEventResult] = []
     for event in merged:
-        insufficient_vehicle_evidence = (
-            "INSUFFICIENT_VEHICLE_OBSERVATIONS_FOR_NO_PLATE" in event.quality_flags
-        )
         motion_only = "MOTION_ONLY_NO_PLATE_CANDIDATE" in event.quality_flags
         overlaps_plated_event = any(
             event.start_timestamp_ms <= plate_event.end_timestamp_ms
@@ -436,7 +436,6 @@ def consolidate_vehicle_events(
         if (
             event.plate_detection_count == 0
             and overlaps_plated_event
-            or insufficient_vehicle_evidence
             or motion_only
             or weak_unreadable_plate
             or split_unreadable_fragment

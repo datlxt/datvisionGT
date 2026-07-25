@@ -38,24 +38,34 @@ def event(
     )
 
 
-def test_low_evidence_no_plate_is_downgraded_for_review() -> None:
+def test_low_evidence_no_plate_stays_visible_for_review() -> None:
     [result] = _merge_persisted_motion_candidates(
         [event("VEHICLE_1", start_ms=1_000, end_ms=2_000, detections=3)]
     )
-    assert result.classification == "UNREADABLE"
-    assert "INSUFFICIENT_NO_PLATE_EVIDENCE" in result.quality_flags
+    assert result.classification == "NO_PLATE"
+    assert "LOW_EVIDENCE_NO_PLATE" in result.quality_flags
 
 
-def test_overlapping_split_no_plate_tracks_are_deduplicated() -> None:
+def test_concurrent_no_plate_tracks_are_deduplicated() -> None:
     results = _merge_persisted_motion_candidates(
         [
-            event("VEHICLE_1", start_ms=1_000, end_ms=2_000),
-            event("VEHICLE_2", start_ms=10_000, end_ms=11_000),
+            event("VEHICLE_1", start_ms=1_000, end_ms=2_500),
+            event("VEHICLE_2", start_ms=2_000, end_ms=3_000),  # overlaps the first in time
         ]
     )
     assert len(results) == 1
     assert results[0].vehicle_detection_count == 10
     assert "MERGED_DUPLICATE_TRACK" in results[0].quality_flags
+
+
+def test_distinct_sequential_no_plate_vehicles_are_kept_separate() -> None:
+    results = _merge_persisted_motion_candidates(
+        [
+            event("VEHICLE_1", start_ms=1_000, end_ms=2_000),
+            event("VEHICLE_2", start_ms=10_000, end_ms=11_000),  # a separate later pass
+        ]
+    )
+    assert len(results) == 2
 
 
 def test_persisted_same_plate_is_one_record_and_keeps_best_crop() -> None:

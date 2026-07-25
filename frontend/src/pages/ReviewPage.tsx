@@ -179,14 +179,9 @@ export function ReviewPage({ job }: { job: Job }) {
     <section className="page review-page">
       <PageHeader
         action={
-          <div className="table-actions">
-            <a className="button button-primary" href={`/api/v1/jobs/${job.id}/export.xlsx`}>
-              <Icon name="download" size={18} /> Export Excel (Plate Report)
-            </a>
-            <a className="button button-secondary" href={`/api/v1/jobs/${job.id}/export.csv`}>
-              <Icon name="download" size={18} /> CSV
-            </a>
-          </div>
+          <a className="button button-primary" href={`/api/v1/jobs/${job.id}/export.xlsx`}>
+            <Icon name="download" size={18} /> Export Excel (Plate Report)
+          </a>
         }
         description={`${results.total} case model · ${results.counts.RECOGNIZED ?? 0} đọc được · ${
           results.counts.NO_PLATE ?? 0

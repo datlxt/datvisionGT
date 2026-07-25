@@ -50,17 +50,28 @@ def test_no_plate_requires_repeated_vehicle_evidence() -> None:
     assert result.vehicle_detection_count == 5
 
 
-def test_single_vehicle_frame_is_not_declared_no_plate() -> None:
+def test_single_vehicle_frame_is_a_low_evidence_no_plate_case() -> None:
+    # A real (semantic) vehicle without a plate is still an event, even from one frame.
     result = finalize_vehicle_track(VehicleTrack("VEHICLE_000001", [observation(1)]))
-    assert result.classification == EventClassification.UNREADABLE
-    assert "INSUFFICIENT_VEHICLE_OBSERVATIONS_FOR_NO_PLATE" in result.quality_flags
+    assert result.classification == EventClassification.NO_PLATE
+    assert "LOW_EVIDENCE_NO_PLATE" in result.quality_flags
 
 
 def test_three_semantic_detections_remain_a_no_plate_review_candidate() -> None:
     track = VehicleTrack("VEHICLE_000001", [observation(index) for index in range(3)])
     result = finalize_vehicle_track(track)
-    assert result.classification == EventClassification.UNREADABLE
-    assert "INSUFFICIENT_VEHICLE_OBSERVATIONS_FOR_NO_PLATE" in result.quality_flags
+    assert result.classification == EventClassification.NO_PLATE
+    assert "LOW_EVIDENCE_NO_PLATE" in result.quality_flags
+
+
+def test_short_no_plate_vehicle_is_kept_not_dropped() -> None:
+    # Contract rule #5: a short no-plate pass must still appear in the list.
+    event = finalize_vehicle_track(
+        VehicleTrack("VEHICLE_000001", [observation(index) for index in range(3)])
+    )
+    merged = consolidate_vehicle_events([event])
+    assert len(merged) == 1
+    assert merged[0].classification == EventClassification.NO_PLATE
 
 
 def test_motion_only_track_is_a_review_candidate_not_confirmed_no_plate() -> None:
@@ -346,7 +357,24 @@ def test_single_unreadable_fragment_overlapping_readable_track_is_removed() -> N
     assert merged[0].normalized_plate == "29S700863"
 
 
-def test_split_no_plate_tracks_with_overlapping_boxes_are_merged() -> None:
+def test_concurrent_no_plate_fragments_of_one_vehicle_are_merged() -> None:
+    # Two tracks active at the same time (bbox jitter split one bike) → one event.
+    first = finalize_vehicle_track(
+        VehicleTrack("VEHICLE_000001", [observation(index) for index in range(5)])
+    )
+    second = finalize_vehicle_track(
+        VehicleTrack("VEHICLE_000002", [observation(index) for index in range(2, 7)])
+    )
+    merged = consolidate_vehicle_events([first, second])
+    assert len(merged) == 1
+    assert merged[0].classification == EventClassification.NO_PLATE
+    assert merged[0].vehicle_detection_count == 10
+    assert "MERGED_DUPLICATE_TRACK" in merged[0].quality_flags
+
+
+def test_distinct_sequential_no_plate_vehicles_are_kept_separate() -> None:
+    # Contract rule #5 + recall: two no-plate bikes passing in sequence are two cases,
+    # even at the same lane position, and must not be collapsed into one.
     first = finalize_vehicle_track(
         VehicleTrack("VEHICLE_000001", [observation(index) for index in range(5)])
     )
@@ -354,10 +382,7 @@ def test_split_no_plate_tracks_with_overlapping_boxes_are_merged() -> None:
         VehicleTrack("VEHICLE_000002", [observation(index) for index in range(60, 65)])
     )
     merged = consolidate_vehicle_events([first, second])
-    assert len(merged) == 1
-    assert merged[0].classification == EventClassification.NO_PLATE
-    assert merged[0].vehicle_detection_count == 10
-    assert "MERGED_DUPLICATE_TRACK" in merged[0].quality_flags
+    assert len(merged) == 2
 
 
 def test_best_frame_must_agree_with_track_vote() -> None:

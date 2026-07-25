@@ -10,14 +10,25 @@ services:
       - caddy_config:/config
 
   backend:
+    build:
+      args:
+        BAKE_MODELS: "1"
     environment:
       APP_ENV: production
       APP_DEBUG: "false"
+    # Use the models baked into the image; drop the host models mount from the dev compose.
+    volumes: !override
+      - ${DATA_ROOT:-./storage}:/app/storage
 
   worker:
+    build:
+      args:
+        BAKE_MODELS: "1"
     environment:
       APP_ENV: production
       APP_DEBUG: "false"
+    volumes: !override
+      - ${DATA_ROOT:-./storage}:/app/storage
 
 volumes:
   caddy_data:

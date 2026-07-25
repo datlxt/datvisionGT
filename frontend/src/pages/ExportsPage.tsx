@@ -27,10 +27,10 @@ export function ExportsPage({
       <div className="export-notice card">
         <Icon name="database" size={22} />
         <div>
-          <strong>Backend hỗ trợ export kết quả model dạng CSV và Excel (Plate Report).</strong>
+          <strong>Export Excel "Plate Report" — đúng format kiểm duyệt cho QC/tester.</strong>
           <p>
-            File Excel theo đúng format kiểm duyệt: ảnh crop biển số nhúng sẵn, cột GT Plate và Kết
-            quả QA để reviewer điền. GT Final tổng hợp chưa có API tương ứng.
+            Mỗi dòng một xe: ảnh crop biển số nhúng sẵn, biển model đọc, Start/End, Confidence,
+            Frame # và cột GT Plate / Kết quả QA để reviewer đối chiếu. GT Final tổng hợp chưa có API.
           </p>
         </div>
       </div>
@@ -56,7 +56,7 @@ export function ExportsPage({
                   <th>Tiến độ</th>
                   <th>Trạng thái</th>
                   <th>Cập nhật</th>
-                  <th>Kết quả model</th>
+                  <th>Export</th>
                   <th>GT Final</th>
                 </tr>
               </thead>
@@ -83,20 +83,12 @@ export function ExportsPage({
                     <td>{formatDate(job.updated_at)}</td>
                     <td>
                       {isReadyForReview(job) ? (
-                        <div className="table-actions">
-                          <a
-                            className="button button-primary button-compact"
-                            href={`/api/v1/jobs/${job.id}/export.xlsx`}
-                          >
-                            <Icon name="download" size={16} /> Excel
-                          </a>
-                          <a
-                            className="button button-secondary button-compact"
-                            href={`/api/v1/jobs/${job.id}/export.csv`}
-                          >
-                            <Icon name="download" size={16} /> CSV
-                          </a>
-                        </div>
+                        <a
+                          className="button button-primary button-compact"
+                          href={`/api/v1/jobs/${job.id}/export.xlsx`}
+                        >
+                          <Icon name="download" size={16} /> Excel (Plate Report)
+                        </a>
                       ) : (
                         <button
                           className="button button-secondary button-compact"
