@@ -22,6 +22,7 @@ type IconName =
   | "alert"
   | "eye"
   | "refresh"
+  | "trash"
   | "x";
 
 export function Icon({
@@ -179,6 +180,14 @@ export function Icon({
     x: (
       <>
         <path d="M6 6l12 12M18 6 6 18" />
+      </>
+    ),
+    trash: (
+      <>
+        <path d="M4 7h16" />
+        <path d="M9 7V4h6v3" />
+        <path d="M6 7l1 13h10l1-13" />
+        <path d="M10 11v6M14 11v6" />
       </>
     ),
   };

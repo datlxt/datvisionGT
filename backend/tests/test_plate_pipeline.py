@@ -357,13 +357,14 @@ def test_single_unreadable_fragment_overlapping_readable_track_is_removed() -> N
     assert merged[0].normalized_plate == "29S700863"
 
 
-def test_concurrent_no_plate_fragments_of_one_vehicle_are_merged() -> None:
-    # Two tracks active at the same time (bbox jitter split one bike) → one event.
+def test_no_plate_fragments_within_presence_window_are_merged() -> None:
+    # One motorcycle split by the tracker into short fragments a few seconds apart
+    # (obs*250ms: 0-1000ms then 5000-6000ms, gap 4s) → one event, not duplicates.
     first = finalize_vehicle_track(
         VehicleTrack("VEHICLE_000001", [observation(index) for index in range(5)])
     )
     second = finalize_vehicle_track(
-        VehicleTrack("VEHICLE_000002", [observation(index) for index in range(2, 7)])
+        VehicleTrack("VEHICLE_000002", [observation(index) for index in range(20, 25)])
     )
     merged = consolidate_vehicle_events([first, second])
     assert len(merged) == 1
@@ -373,13 +374,13 @@ def test_concurrent_no_plate_fragments_of_one_vehicle_are_merged() -> None:
 
 
 def test_distinct_sequential_no_plate_vehicles_are_kept_separate() -> None:
-    # Contract rule #5 + recall: two no-plate bikes passing in sequence are two cases,
-    # even at the same lane position, and must not be collapsed into one.
+    # Two different no-plate bikes with a large gap (lane cleared: 0-1000ms then 20-21s)
+    # are two cases and must not be collapsed into one.
     first = finalize_vehicle_track(
         VehicleTrack("VEHICLE_000001", [observation(index) for index in range(5)])
     )
     second = finalize_vehicle_track(
-        VehicleTrack("VEHICLE_000002", [observation(index) for index in range(60, 65)])
+        VehicleTrack("VEHICLE_000002", [observation(index) for index in range(80, 85)])
     )
     merged = consolidate_vehicle_events([first, second])
     assert len(merged) == 2

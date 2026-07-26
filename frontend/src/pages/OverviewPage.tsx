@@ -1,17 +1,28 @@
 import { Icon } from "../components/Icon";
-import { EmptyState, PageHeader, ProgressBar, StatusBadge } from "../components/ui";
+import {
+  ConfirmDialog,
+  EmptyState,
+  PageHeader,
+  ProgressBar,
+  StatusBadge,
+} from "../components/ui";
 import { formatDate, statusLabel, statusTone } from "../lib/format";
+import { useJobDeletion } from "../lib/useJobDeletion";
 import type { Job } from "../types";
 
 export function OverviewPage({
   jobs,
   onCreate,
+  onDelete,
   onOpen,
 }: {
   jobs: Job[];
   onCreate: () => void;
+  onDelete: (job: Job) => Promise<void>;
   onOpen: (job: Job) => void;
 }) {
+  const deletion = useJobDeletion(onDelete);
+
   const processing = jobs.filter((job) =>
     ["PENDING", "QUEUED", "PROCESSING"].includes(job.status),
   ).length;
@@ -109,15 +120,26 @@ export function OverviewPage({
                       </td>
                       <td>{formatDate(job.updated_at)}</td>
                       <td>
-                        <button
-                          aria-label={`Mở ${job.source_name}`}
-                          className="icon-button"
-                          onClick={() => onOpen(job)}
-                          title="Mở job"
-                          type="button"
-                        >
-                          <Icon name="arrow" size={18} />
-                        </button>
+                        <div className="row-actions">
+                          <button
+                            aria-label={`Mở ${job.source_name}`}
+                            className="icon-button"
+                            onClick={() => onOpen(job)}
+                            title="Mở job"
+                            type="button"
+                          >
+                            <Icon name="arrow" size={18} />
+                          </button>
+                          <button
+                            aria-label={`Xóa ${job.source_name}`}
+                            className="icon-button icon-button-danger"
+                            onClick={() => deletion.request(job)}
+                            title="Xóa job"
+                            type="button"
+                          >
+                            <Icon name="trash" size={17} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -164,6 +186,21 @@ export function OverviewPage({
           </p>
         </aside>
       </div>
+
+      <ConfirmDialog
+        busy={deletion.busy}
+        description={
+          <>
+            Xóa job <strong>{deletion.pending?.source_name}</strong>? Toàn bộ dữ liệu và bằng
+            chứng sẽ bị xóa vĩnh viễn, không thể hoàn tác.
+            {deletion.error && <span className="modal-error">{deletion.error}</span>}
+          </>
+        }
+        onCancel={deletion.cancel}
+        onConfirm={deletion.confirm}
+        open={deletion.pending !== null}
+        title="Xóa job này?"
+      />
     </section>
   );
 }

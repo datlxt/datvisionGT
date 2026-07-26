@@ -46,11 +46,11 @@ def test_low_evidence_no_plate_stays_visible_for_review() -> None:
     assert "LOW_EVIDENCE_NO_PLATE" in result.quality_flags
 
 
-def test_concurrent_no_plate_tracks_are_deduplicated() -> None:
+def test_no_plate_fragments_within_window_are_deduplicated() -> None:
     results = _merge_persisted_motion_candidates(
         [
-            event("VEHICLE_1", start_ms=1_000, end_ms=2_500),
-            event("VEHICLE_2", start_ms=2_000, end_ms=3_000),  # overlaps the first in time
+            event("VEHICLE_1", start_ms=1_000, end_ms=2_000),
+            event("VEHICLE_2", start_ms=5_000, end_ms=6_000),  # 3s gap: same pass
         ]
     )
     assert len(results) == 1
@@ -62,7 +62,7 @@ def test_distinct_sequential_no_plate_vehicles_are_kept_separate() -> None:
     results = _merge_persisted_motion_candidates(
         [
             event("VEHICLE_1", start_ms=1_000, end_ms=2_000),
-            event("VEHICLE_2", start_ms=10_000, end_ms=11_000),  # a separate later pass
+            event("VEHICLE_2", start_ms=20_000, end_ms=21_000),  # 18s gap: lane cleared
         ]
     )
     assert len(results) == 2

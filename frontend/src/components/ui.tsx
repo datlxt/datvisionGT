@@ -1,6 +1,70 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 import { Icon } from "./Icon";
+
+export function ConfirmDialog({
+  open,
+  title,
+  description,
+  confirmLabel = "Xóa",
+  cancelLabel = "Hủy",
+  danger = true,
+  busy = false,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  title: string;
+  description: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  danger?: boolean;
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, busy, onCancel]);
+
+  if (!open) return null;
+  return (
+    <div className="modal-overlay" onClick={() => !busy && onCancel()} role="presentation">
+      <div
+        aria-label={title}
+        aria-modal="true"
+        className="modal-card"
+        onClick={(event) => event.stopPropagation()}
+        role="alertdialog"
+      >
+        <span className={`modal-icon${danger ? " modal-icon-danger" : ""}`}>
+          <Icon name={danger ? "trash" : "alert"} size={24} />
+        </span>
+        <h3>{title}</h3>
+        <p>{description}</p>
+        <div className="modal-actions">
+          <button className="button button-secondary" disabled={busy} onClick={onCancel} type="button">
+            {cancelLabel}
+          </button>
+          <button
+            autoFocus
+            className={`button ${danger ? "button-danger" : "button-primary"}`}
+            disabled={busy}
+            onClick={onConfirm}
+            type="button"
+          >
+            {busy ? "Đang xử lý…" : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function StatusBadge({
   children,

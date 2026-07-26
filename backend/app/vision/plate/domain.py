@@ -284,6 +284,7 @@ def consolidate_vehicle_events(
     events: list[VehicleEventResult],
     *,
     same_plate_gap_ms: int = 5_000,
+    same_no_plate_gap_ms: int = 14_000,
     near_plate_gap_ms: int = 1_500,
 ) -> list[VehicleEventResult]:
     """Merge split vehicle tracks and publish only evidence-backed events."""
@@ -356,15 +357,12 @@ def consolidate_vehicle_events(
                 index
                 for index in range(len(no_plate_merged) - 1, -1, -1)
                 if no_plate_merged[index].classification == EventClassification.NO_PLATE
-                # Merge only concurrently-active tracks of the same vehicle (true double
-                # tracking). Sequential passes at the same lane spot stay separate cases,
-                # so distinct no-plate motorcycles are never collapsed into one.
-                and event.start_timestamp_ms <= no_plate_merged[index].end_timestamp_ms
-                and bbox_iou(
-                    event.best_observation.vehicle_bbox,
-                    no_plate_merged[index].best_observation.vehicle_bbox,
-                )
-                >= 0.5
+                # The tracker often splits one no-plate motorcycle into several short tracks
+                # across its ~5-20s presence. Time proximity is the reliable signal: a moving
+                # bike's fragments have low bbox IoU (it travels up the frame), while two
+                # different bikes share the same lane spot, so IoU cannot separate them.
+                and event.start_timestamp_ms - no_plate_merged[index].end_timestamp_ms
+                <= same_no_plate_gap_ms
             ),
             None,
         )

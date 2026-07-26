@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 from redis import Redis
@@ -276,3 +277,37 @@ def cancel_job(job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)]) 
     session.commit()
     session.refresh(job)
     return job
+
+
+@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_job(job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)]) -> Response:
+    """Delete a job with all its DB records (cascade) and stored evidence/uploads."""
+
+    job = session.get(ProcessingJob, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+    if job.status in {"QUEUED", "PROCESSING"}:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Hủy job trước khi xóa")
+
+    settings = get_settings()
+    root = settings.storage_root.resolve()
+    removable: list[Path] = []
+    if job.source_path:
+        upload_dir = (root / job.source_path).resolve().parent
+        if upload_dir.is_relative_to(root) and upload_dir != root:
+            removable.append(upload_dir)
+    job_dir = (root / "jobs" / str(job.id)).resolve()
+    if job_dir.is_relative_to(root):
+        removable.append(job_dir)
+
+    try:  # Best effort: drop any lingering RQ job so a deleted id is not reprocessed.
+        rq_job = RqJob.fetch(str(job.id), connection=Redis.from_url(settings.redis_url))
+        rq_job.delete()
+    except Exception:
+        pass
+
+    session.delete(job)
+    session.commit()
+    for directory in removable:
+        shutil.rmtree(directory, ignore_errors=True)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -47,6 +47,16 @@ export default function App() {
     ]);
   }, []);
 
+  const deleteJob = useCallback(async (job: Job) => {
+    const response = await fetch(`/api/v1/jobs/${job.id}`, { method: "DELETE" });
+    if (!response.ok && response.status !== 404) {
+      const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+      throw new Error(payload?.detail ?? `HTTP ${response.status}`);
+    }
+    setJobs((current) => current.filter((candidate) => candidate.id !== job.id));
+    setSelectedJob((current) => (current?.id === job.id ? null : current));
+  }, []);
+
   function openJob(job: Job) {
     setSelectedJob(job);
     setView(isReadyForReview(job) ? "review" : "processing");
@@ -79,7 +89,12 @@ export default function App() {
       );
     } else {
       content = (
-        <OverviewPage jobs={jobs} onCreate={() => setView("create")} onOpen={openJob} />
+        <OverviewPage
+          jobs={jobs}
+          onCreate={() => setView("create")}
+          onDelete={deleteJob}
+          onOpen={openJob}
+        />
       );
     }
   } else if (view === "create") {
@@ -103,7 +118,7 @@ export default function App() {
   } else if (view === "review" && selectedJob) {
     content = <ReviewPage job={selectedJob} key={selectedJob.id} />;
   } else if (view === "exports") {
-    content = <ExportsPage jobs={jobs} onOpen={openJob} />;
+    content = <ExportsPage jobs={jobs} onDelete={deleteJob} onOpen={openJob} />;
   } else {
     content = (
       <section className="page">
