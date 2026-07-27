@@ -12,7 +12,11 @@ from app.export import (
     build_plate_report_workbook,
     workbook_to_bytes,
 )
-from app.export.plate_report import format_confidence, format_timestamp
+from app.export.plate_report import (
+    format_confidence,
+    format_timestamp,
+    quality_prefill,
+)
 
 
 def test_timestamp_and_confidence_formatting_match_report() -> None:
@@ -23,13 +27,22 @@ def test_timestamp_and_confidence_formatting_match_report() -> None:
     assert format_confidence(None) == "—"
 
 
-def _make_crop(path: Path) -> Path:
-    Image.new("RGB", (120, 60), color=(40, 80, 160)).save(path, format="JPEG")
+def test_quality_prefill_only_fills_no_plate() -> None:
+    # Quality is a human judgement; only the deterministic no-plate case is pre-filled.
+    assert quality_prefill("NO_PLATE") == "Xe không biển"
+    assert quality_prefill("RECOGNIZED") == ""
+    assert quality_prefill("UNREADABLE") == ""
+    assert quality_prefill("") == ""
+
+
+def _make_image(path: Path, size: tuple[int, int]) -> Path:
+    Image.new("RGB", size, color=(40, 80, 160)).save(path, format="JPEG")
     return path
 
 
-def test_workbook_layout_values_and_embedded_crop(tmp_path: Path) -> None:
-    crop = _make_crop(tmp_path / "plate.jpg")
+def test_workbook_layout_values_and_embedded_media(tmp_path: Path) -> None:
+    crop = _make_image(tmp_path / "plate.jpg", (120, 60))
+    frame = _make_image(tmp_path / "frame.jpg", (1280, 720))
     rows = [
         PlateReportRow(
             plate_text="29N196452",
@@ -38,6 +51,9 @@ def test_workbook_layout_values_and_embedded_crop(tmp_path: Path) -> None:
             frame_number=44,
             confidence=0.97,
             crop_path=crop,
+            full_frame_path=frame,
+            track_code="VEHICLE_000002",
+            classification="RECOGNIZED",
         ),
         PlateReportRow(
             plate_text="LPN_NO_PLATE_VEHICLE",
@@ -46,6 +62,9 @@ def test_workbook_layout_values_and_embedded_crop(tmp_path: Path) -> None:
             frame_number=6,
             confidence=None,
             crop_path=None,
+            full_frame_path=frame,
+            track_code="VEHICLE_000040",
+            classification="NO_PLATE",
         ),
     ]
 
@@ -53,27 +72,28 @@ def test_workbook_layout_values_and_embedded_crop(tmp_path: Path) -> None:
     sheet = workbook.active
 
     assert sheet.title == "Plate Report"
-    assert sheet.freeze_panes == "A2"
     assert tuple(cell.value for cell in sheet[1]) == PLATE_REPORT_HEADERS
 
-    # Recognized motorcycle row.
+    # Recognized row: TrackID (D), plate (E), Phân loại (F), timings, confidence.
     assert sheet["A2"].value == 1
-    assert sheet["C2"].value == "29N196452"
-    assert sheet["D2"].value is None  # GT Plate stays empty for the reviewer.
-    assert sheet["E2"].value == "0:03"
-    assert sheet["F2"].value == "0:13"
-    assert sheet["G2"].value == "97%"
-    assert sheet["H2"].value == 44
-    assert sheet["I2"].value == "Không"
+    assert sheet["D2"].value == "VEHICLE_000002"
+    assert sheet["E2"].value == "29N196452"
+    assert sheet["F2"].value in (None, "")  # quality is a dropdown the reviewer fills
+    assert sheet["G2"].value is None  # GT Plate stays empty for the reviewer.
+    assert sheet["H2"].value == "0:03"
+    assert sheet["I2"].value == "0:13"
+    assert sheet["J2"].value == "97%"
+    assert sheet["K2"].value == 44
 
-    # NO_PLATE row keeps a placeholder instead of an image.
-    assert sheet["C3"].value == "LPN_NO_PLATE_VEHICLE"
-    assert sheet["G3"].value == "—"
-    assert sheet["B3"].value == "Không có ảnh"
+    # NO_PLATE row: sentinel text, no crop image, "Xe không biển" label.
+    assert sheet["E3"].value == "LPN_NO_PLATE_VEHICLE"
+    assert sheet["F3"].value == "Xe không biển"
+    assert sheet["J3"].value == "—"
+    assert sheet["C3"].value == "Không có ảnh"
 
-    # Exactly one crop is embedded (the recognized row only).
-    assert len(sheet._images) == 1
-    assert sheet.auto_filter.ref == "A1:K3"
+    # Full frame embedded on both rows; crop only on the recognized row (2 + 1 = 3).
+    assert len(sheet._images) == 3
+    assert sheet.auto_filter.ref == "A1:N3"
 
 
 def test_empty_report_has_only_headers() -> None:

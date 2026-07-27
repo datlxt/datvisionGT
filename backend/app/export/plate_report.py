@@ -1,11 +1,11 @@
 """Native ``Plate Report`` Excel exporter.
 
-Reproduces the human-facing report format (one row per motorcycle event, with an
-embedded plate crop and reviewer columns) directly from validated pipeline evidence,
-replacing the browser userscript that scraped the legacy web table.
+Reproduces the human-facing report format (one row per motorcycle event) directly from
+validated pipeline evidence: an embedded full frame and plate crop, the model reading,
+TrackID, a data label (Phân loại), confidence, and reviewer columns.
 
 The module is intentionally decoupled from FastAPI and SQLAlchemy: callers pass plain
-``PlateReportRow`` values plus resolved crop paths, so it can be unit-tested offline.
+``PlateReportRow`` values plus resolved evidence paths, so it can be unit-tested offline.
 """
 
 from __future__ import annotations
@@ -24,26 +24,50 @@ SHEET_TITLE = "Plate Report"
 NO_PLATE_TEXT = "LPN_NO_PLATE_VEHICLE"
 MISSING_IMAGE_TEXT = "Không có ảnh"
 
-# (header, width) pairs, kept in the exact order the reviewers already use.
+# (header, width) pairs, in reviewer order. Column indices are derived from this tuple.
 _COLUMNS: tuple[tuple[str, int], ...] = (
-    ("STT", 7),
-    ("Ảnh crop biển số", 25),
-    ("Plate model đọc", 22),
-    ("GT Plate", 22),
-    ("Start", 12),
-    ("End", 12),
-    ("Confidence", 15),
-    ("Frame #", 12),
-    ("Discard", 12),
-    ("Kết quả QA", 20),
-    ("Ghi chú QA", 40),
+    ("STT", 6),
+    ("Ảnh frame", 30),
+    ("Ảnh crop biển số", 22),
+    ("TrackID", 16),
+    ("Plate model đọc", 18),
+    ("Phân loại", 16),
+    ("GT Plate", 18),
+    ("Start", 9),
+    ("End", 9),
+    ("Confidence", 12),
+    ("Frame #", 9),
+    ("Discard", 10),
+    ("Kết quả QA", 18),
+    ("Ghi chú QA", 32),
 )
 PLATE_REPORT_HEADERS: tuple[str, ...] = tuple(header for header, _ in _COLUMNS)
+_COL = {header: index for index, (header, _) in enumerate(_COLUMNS, start=1)}
+
+# Plate-quality taxonomy for the "Phân loại" data-label column. These describe a human
+# judgement (glare/forged/deformed cannot be auto-classified reliably without a dedicated
+# trained classifier), so the column is a dropdown the reviewer fills; only the fully
+# deterministic "Xe không biển" is pre-filled from the model.
+_QUALITY_OPTIONS = (
+    "Biển đẹp bình thường",
+    "Biển bẩn",
+    "Biển cũ, xước, mờ",
+    "Biển bị che vật lý",
+    "Biển bị dán (icon, decal, trang trí...)",
+    "Biển bị chói sáng",
+    "Biển giả mạo (che 1 vài số, dán biển khác lên...)",
+    "Biển biến dạng vật lý (cong, vênh)",
+    "Biển bóng của vật thể che khuất",
+    "Xe không biển",
+)
+_QUALITY_LIST_SHEET = "Lists"
 
 _QA_OPTIONS = "Đúng,Sai,Trùng,Không biển,Ảnh mờ,Cần kiểm tra"
+_FRAME_WIDTH_PX = 200
 _CROP_WIDTH_PX = 125
 _CROP_HEIGHT_PX = 60
-_ROW_HEIGHT_PT = 64
+_ROW_HEIGHT_PT = 86
+_CENTERED_COLUMNS = {_COL["STT"], _COL["TrackID"], _COL["Confidence"], _COL["Frame #"]}
 
 _HEADER_FILL = PatternFill(fill_type="solid", fgColor="D9EAF7")
 _HEADER_FONT = Font(bold=True)
@@ -68,6 +92,9 @@ class PlateReportRow:
     qa_result: str = ""
     qa_note: str = ""
     crop_path: Path | None = None
+    track_code: str = ""
+    classification: str = ""
+    full_frame_path: Path | None = None
 
 
 def format_timestamp(milliseconds: int) -> str:
@@ -81,6 +108,31 @@ def format_confidence(confidence: float | None) -> str:
     return "—" if confidence is None else f"{round(confidence * 100)}%"
 
 
+def quality_prefill(classification: str) -> str:
+    """Only the deterministic no-plate case is pre-filled; the rest is a human dropdown."""
+
+    return "Xe không biển" if classification == "NO_PLATE" else ""
+
+
+def _scaled_image(path: Path, width_px: int, height_px: int | None = None) -> XlsxImage:
+    """Downscale the source to keep the workbook small, then embed it."""
+
+    from PIL import Image as PilImage
+
+    with PilImage.open(path) as source:
+        rgb = source.convert("RGB")
+        if height_px is None:
+            height_px = max(1, round(rgb.height * width_px / rgb.width))
+        rgb = rgb.resize((width_px, height_px))
+        buffer = io.BytesIO()
+        rgb.save(buffer, format="JPEG", quality=80)
+    buffer.seek(0)
+    image = XlsxImage(buffer)
+    image.width = width_px
+    image.height = height_px
+    return image
+
+
 def build_plate_report_workbook(rows: list[PlateReportRow]) -> Workbook:
     workbook = Workbook()
     sheet = workbook.active
@@ -88,49 +140,70 @@ def build_plate_report_workbook(rows: list[PlateReportRow]) -> Workbook:
     sheet.freeze_panes = "A2"
 
     sheet.append(list(PLATE_REPORT_HEADERS))
-    header = sheet[1]
     sheet.row_dimensions[1].height = 28
-    for index, (cell, (_, width)) in enumerate(zip(header, _COLUMNS, strict=True), start=1):
+    for cell, (_, width) in zip(sheet[1], _COLUMNS, strict=True):
         cell.fill = _HEADER_FILL
         cell.font = _HEADER_FONT
         cell.alignment = _HEADER_ALIGN
         cell.border = _HEADER_BORDER
-        sheet.column_dimensions[get_column_letter(index)].width = width
+        sheet.column_dimensions[cell.column_letter].width = width
 
     qa_validation = DataValidation(
         type="list", formula1=f'"{_QA_OPTIONS}"', allow_blank=True, showErrorMessage=True
     )
     sheet.add_data_validation(qa_validation)
 
+    # The quality categories contain commas and exceed the inline-list limit, so they live
+    # in a hidden sheet and the "Phân loại" dropdown references that range.
+    lists = workbook.create_sheet(_QUALITY_LIST_SHEET)
+    for index, option in enumerate(_QUALITY_OPTIONS, start=1):
+        lists.cell(row=index, column=1, value=option)
+    lists.sheet_state = "hidden"
+    quality_validation = DataValidation(
+        type="list",
+        formula1=f"{_QUALITY_LIST_SHEET}!$A$1:$A${len(_QUALITY_OPTIONS)}",
+        allow_blank=True,
+        showErrorMessage=True,
+    )
+    sheet.add_data_validation(quality_validation)
+
     for position, row in enumerate(rows, start=1):
         excel_row = position + 1
-        values = (
-            position,
-            None,  # crop image is anchored separately.
-            row.plate_text,
-            row.gt_text,
-            format_timestamp(row.start_ms),
-            format_timestamp(row.end_ms),
-            format_confidence(row.confidence),
-            row.frame_number,
-            "Có" if row.discard else "Không",
-            row.qa_result,
-            row.qa_note,
-        )
-        for column, value in enumerate(values, start=1):
-            cell = sheet.cell(row=excel_row, column=column, value=value)
+        values = {
+            _COL["STT"]: position,
+            _COL["TrackID"]: row.track_code,
+            _COL["Plate model đọc"]: row.plate_text,
+            _COL["Phân loại"]: quality_prefill(row.classification),
+            _COL["GT Plate"]: row.gt_text,
+            _COL["Start"]: format_timestamp(row.start_ms),
+            _COL["End"]: format_timestamp(row.end_ms),
+            _COL["Confidence"]: format_confidence(row.confidence),
+            _COL["Frame #"]: row.frame_number,
+            _COL["Discard"]: "Có" if row.discard else "Không",
+            _COL["Kết quả QA"]: row.qa_result,
+            _COL["Ghi chú QA"]: row.qa_note,
+        }
+        for column in range(1, len(_COLUMNS) + 1):
+            cell = sheet.cell(row=excel_row, column=column, value=values.get(column))
             cell.border = _CELL_BORDER
-            cell.alignment = _CENTER_ALIGN if column in (1, 8) else _CELL_ALIGN
+            cell.alignment = _CENTER_ALIGN if column in _CENTERED_COLUMNS else _CELL_ALIGN
         sheet.row_dimensions[excel_row].height = _ROW_HEIGHT_PT
-        qa_validation.add(sheet.cell(row=excel_row, column=10))
+        qa_validation.add(sheet.cell(row=excel_row, column=_COL["Kết quả QA"]))
+        quality_validation.add(sheet.cell(row=excel_row, column=_COL["Phân loại"]))
+
+        if row.full_frame_path is not None and row.full_frame_path.is_file():
+            frame_cell = f"{get_column_letter(_COL['Ảnh frame'])}{excel_row}"
+            sheet.add_image(_scaled_image(row.full_frame_path, _FRAME_WIDTH_PX), frame_cell)
+        else:
+            sheet.cell(row=excel_row, column=_COL["Ảnh frame"], value=MISSING_IMAGE_TEXT)
 
         if row.crop_path is not None and row.crop_path.is_file():
-            image = XlsxImage(str(row.crop_path))
-            image.width = _CROP_WIDTH_PX
-            image.height = _CROP_HEIGHT_PX
-            sheet.add_image(image, f"B{excel_row}")
+            crop_cell = f"{get_column_letter(_COL['Ảnh crop biển số'])}{excel_row}"
+            sheet.add_image(
+                _scaled_image(row.crop_path, _CROP_WIDTH_PX, _CROP_HEIGHT_PX), crop_cell
+            )
         else:
-            sheet.cell(row=excel_row, column=2, value=MISSING_IMAGE_TEXT)
+            sheet.cell(row=excel_row, column=_COL["Ảnh crop biển số"], value=MISSING_IMAGE_TEXT)
 
     sheet.auto_filter.ref = f"A1:{get_column_letter(len(_COLUMNS))}{len(rows) + 1}"
     return workbook

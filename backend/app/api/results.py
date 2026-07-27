@@ -493,15 +493,15 @@ def export_results_csv(
     )
 
 
-def _crop_path(job_id: uuid.UUID, crop_url: str | None) -> Path | None:
-    """Resolve a served crop URL back to its on-disk, job-scoped evidence file."""
+def _evidence_path(job_id: uuid.UUID, folder: str, url: str | None) -> Path | None:
+    """Resolve a served evidence URL back to its on-disk, job-scoped file."""
 
-    if not crop_url:
+    if not url:
         return None
     settings = get_settings()
     root = settings.storage_root.resolve()
-    filename = Path(crop_url.rsplit("/", 1)[-1]).name
-    candidate = (root / "jobs" / str(job_id) / "crops" / filename).resolve()
+    filename = Path(url.rsplit("/", 1)[-1]).name
+    candidate = (root / "jobs" / str(job_id) / folder / filename).resolve()
     if not candidate.is_relative_to(root) or not candidate.is_file():
         return None
     return candidate
@@ -518,7 +518,10 @@ def _event_to_report_row(job_id: uuid.UUID, event: EventResult) -> PlateReportRo
         end_ms=event.end_timestamp_ms,
         frame_number=event.best_frame_number,
         confidence=event.confidence,
-        crop_path=_crop_path(job_id, event.plate_crop_url),
+        crop_path=_evidence_path(job_id, "crops", event.plate_crop_url),
+        track_code=event.track_code,
+        classification=event.classification,
+        full_frame_path=_evidence_path(job_id, "frames", event.full_frame_url),
     )
 
 
