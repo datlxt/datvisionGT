@@ -1,19 +1,43 @@
 from __future__ import annotations
 
+import hashlib
+import tempfile
 import uuid
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.results import EventResult, _load_results
+from app.benchmark.gt_report import (
+    NO_PLATE,
+    ModelEvent,
+    evaluate_events,
+    parse_qa_gt_xlsx,
+)
 from app.db.session import get_db
-from app.models import GroundTruthRecord
+from app.models import Artifact, Detection, GroundTruthRecord, ProcessingJob, Track
 from app.services import ground_truth as gt
 
 router = APIRouter(tags=["ground-truth"])
+
+
+def _materialize_records(session: Session, job: ProcessingJob, events: list[EventResult]) -> None:
+    for event in events:
+        gt.materialize_draft_record(
+            session,
+            job_id=job.id,
+            track_id=event.track_id,
+            track_code=event.track_code,
+            classification=event.classification,
+            normalized_plate=event.normalized_plate,
+            confidence=event.confidence,
+            quality_flags=event.quality_flags,
+        )
+    session.commit()
 
 
 class GroundTruthRecordResponse(BaseModel):
@@ -73,19 +97,7 @@ def list_ground_truth(
 ) -> GroundTruthList:
     job, events = _load_results(job_id, session)
     events_by_track = {event.track_id: event for event in events}
-
-    for event in events:
-        gt.materialize_draft_record(
-            session,
-            job_id=job.id,
-            track_id=event.track_id,
-            track_code=event.track_code,
-            classification=event.classification,
-            normalized_plate=event.normalized_plate,
-            confidence=event.confidence,
-            quality_flags=event.quality_flags,
-        )
-    session.commit()
+    _materialize_records(session, job, events)
 
     records = list(
         session.scalars(
@@ -187,6 +199,279 @@ def duplicate_ground_truth(
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    session.commit()
+    session.refresh(record)
+    return record
+
+
+# --------------------------------------------------------------------------- #
+# Import an existing GT workbook, auto-match it to the model events, and (on a
+# second, explicit step) fill/verify the agreeing cases — no manual copy typing.
+# --------------------------------------------------------------------------- #
+class GtCaseItem(BaseModel):
+    track_id: uuid.UUID | None
+    track_code: str | None
+    model_plate: str
+    classification: str | None
+    gt_plate: str | None
+    quality: str | None
+    agree: bool
+    status: str  # "match" | "diff" | "extra" | "missed"
+
+
+class GtCompareResponse(BaseModel):
+    job_id: uuid.UUID
+    gt_events: int
+    model_events: int
+    detection: dict[str, float]
+    recognition: dict[str, float]
+    items: list[GtCaseItem]
+
+
+class GtApplyItem(BaseModel):
+    track_id: uuid.UUID
+    gt_text: str
+    verify: bool = False
+
+
+class GtApplyRequest(BaseModel):
+    items: list[GtApplyItem]
+
+
+class GtApplyResponse(BaseModel):
+    filled: int
+    verified: int
+
+
+def _model_events(events: list[EventResult]) -> list[ModelEvent]:
+    return [
+        ModelEvent(
+            start_ms=event.start_timestamp_ms,
+            end_ms=event.end_timestamp_ms,
+            plate=(
+                NO_PLATE
+                if event.classification == "NO_PLATE"
+                else (event.normalized_plate or "")
+            ),
+            ref=str(event.track_id),
+        )
+        for event in events
+    ]
+
+
+@router.post("/jobs/{job_id}/gt-compare", response_model=GtCompareResponse)
+def compare_ground_truth(
+    job_id: uuid.UUID,
+    file: UploadFile,
+    session: Annotated[Session, Depends(get_db)],
+) -> GtCompareResponse:
+    """Match an uploaded GT workbook against the job's events and report the diff."""
+
+    job, events = _load_results(job_id, session)
+    _materialize_records(session, job, events)
+
+    suffix = Path(file.filename or "gt.xlsx").suffix.lower() or ".xlsx"
+    if suffix not in {".xlsx", ".xlsm"}:
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Chỉ nhận file .xlsx")
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(file.file.read())
+        tmp_path = Path(tmp.name)
+    try:
+        gt_events = parse_qa_gt_xlsx(tmp_path)
+    except (ValueError, KeyError, OSError) as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"Không đọc được file GT: {exc}"
+        ) from exc
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    events_by_track = {str(event.track_id): event for event in events}
+    report = evaluate_events(gt_events, _model_events(events))
+
+    # Order every case by its position on the timeline so a "GT thiếu" (missed) row appears
+    # exactly where the gap is, not dumped at the bottom.
+    scored: list[tuple[int, GtCaseItem]] = []
+    for pair in report.matched:
+        source = events_by_track.get(pair.model.ref)
+        scored.append((
+            pair.gt.start_ms,
+            GtCaseItem(
+                track_id=uuid.UUID(pair.model.ref) if pair.model.ref else None,
+                track_code=source.track_code if source else None,
+                model_plate=pair.model.plate,
+                classification=source.classification if source else None,
+                gt_plate=pair.gt.expected_plate,
+                quality=pair.gt.quality or None,
+                agree=pair.plate_correct,
+                status="match" if pair.plate_correct else "diff",
+            ),
+        ))
+    for extra in report.extra:
+        source = events_by_track.get(extra.ref)
+        scored.append((
+            extra.start_ms,
+            GtCaseItem(
+                track_id=uuid.UUID(extra.ref) if extra.ref else None,
+                track_code=source.track_code if source else None,
+                model_plate=extra.plate,
+                classification=source.classification if source else None,
+                gt_plate=None,
+                quality=None,
+                agree=False,
+                status="extra",
+            ),
+        ))
+    for missed in report.missed:
+        scored.append((
+            missed.start_ms,
+            GtCaseItem(
+                track_id=None,
+                track_code=None,
+                model_plate="",
+                classification=None,
+                gt_plate=missed.expected_plate,
+                quality=missed.quality or None,
+                agree=False,
+                status="missed",
+            ),
+        ))
+    items = [item for _, item in sorted(scored, key=lambda entry: entry[0])]
+
+    return GtCompareResponse(
+        job_id=job.id,
+        gt_events=len(gt_events),
+        model_events=len(events),
+        detection=report.detection,
+        recognition=report.recognition,
+        items=items,
+    )
+
+
+@router.post("/jobs/{job_id}/gt-apply", response_model=GtApplyResponse)
+def apply_ground_truth(
+    job_id: uuid.UUID,
+    payload: GtApplyRequest,
+    session: Annotated[Session, Depends(get_db)],
+) -> GtApplyResponse:
+    """Fill GT text from the imported file and verify the agreeing cases in one pass."""
+
+    reviewer = gt.get_or_create_default_reviewer(session)
+    filled = verified = 0
+    for item in payload.items:
+        record = session.scalar(
+            select(GroundTruthRecord).where(
+                GroundTruthRecord.job_id == job_id,
+                GroundTruthRecord.track_id == item.track_id,
+            )
+        )
+        if record is None:
+            continue
+        gt.apply_edit(session, record, gt_text=item.gt_text, actor_id=reviewer.id)
+        filled += 1
+        if item.verify:
+            try:
+                gt.apply_verify(session, record, reviewer=reviewer)
+                verified += 1
+            except ValueError:
+                pass
+    session.commit()
+    return GtApplyResponse(filled=filled, verified=verified)
+
+
+# --------------------------------------------------------------------------- #
+# Add a case the model missed. Anchored to the nearest real evidence frame so
+# it stays evidence-backed (contract rule #3), no synthetic data.
+# --------------------------------------------------------------------------- #
+class ManualCaseRequest(BaseModel):
+    timestamp_ms: int
+    gt_text: str = ""  # empty => no-plate vehicle
+    no_plate: bool = False
+    note: str | None = None
+
+
+@router.post("/jobs/{job_id}/ground-truth/manual", response_model=GroundTruthRecordResponse)
+def add_manual_case(
+    job_id: uuid.UUID,
+    payload: ManualCaseRequest,
+    session: Annotated[Session, Depends(get_db)],
+) -> GroundTruthRecord:
+    job = session.get(ProcessingJob, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+
+    frames = list(
+        session.scalars(
+            select(Artifact).where(Artifact.job_id == job.id, Artifact.kind == "FULL_FRAME")
+        ).all()
+    )
+    if not frames:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Job chưa có evidence frame")
+    frame = min(frames, key=lambda item: abs((item.timestamp_ms or 0) - payload.timestamp_ms))
+
+    reviewer = gt.get_or_create_default_reviewer(session)
+    suffix = uuid.uuid4().hex[:8].upper()
+    no_plate = payload.no_plate or not payload.gt_text.strip()
+    width = frame.width or 1
+    height = frame.height or 1
+    frame_number = int(frame.frame_number or 0)
+    timestamp_ms = int(frame.timestamp_ms or 0)
+
+    track = Track(
+        job_id=job.id,
+        track_code=f"MANUAL_{suffix}",
+        object_type="VEHICLE",
+        start_frame=frame_number,
+        end_frame=frame_number,
+        start_timestamp_ms=timestamp_ms,
+        end_timestamp_ms=timestamp_ms,
+        classification="NO_PLATE" if no_plate else "MANUAL_ADDITION",
+        status="READY_FOR_REVIEW",
+        evidence_status="VALID",
+        event_key=hashlib.sha256(f"manual:{job.id}:{suffix}".encode()).hexdigest(),
+    )
+    session.add(track)
+    session.flush()
+
+    detection = Detection(
+        job_id=job.id,
+        track_id=track.id,
+        object_type="VEHICLE",
+        source="MANUAL",
+        frame_number=frame_number,
+        timestamp_ms=timestamp_ms,
+        bbox_x1=0,
+        bbox_y1=0,
+        bbox_x2=width,
+        bbox_y2=height,
+        detection_confidence=1.0,
+        is_best=True,
+        evidence_status="VALID",
+        full_frame_artifact_id=frame.id,
+        crop_artifact_id=frame.id,
+        raw_output={"manual": True},
+    )
+    session.add(detection)
+    session.flush()
+
+    record = GroundTruthRecord(
+        job_id=job.id,
+        track_id=track.id,
+        selected_detection_id=detection.id,
+        record_code=track.track_code,
+        record_source="MANUAL",
+        predicted_text=None,
+        prediction_confidence=None,
+        gt_text=None if no_plate else payload.gt_text.strip(),
+        normalized_gt_text=None if no_plate else gt.normalize_gt_text(payload.gt_text),
+        classification="MANUAL_ADDITION",
+        note=payload.note or None,
+        quality_flags=["MANUAL_ADDITION"],
+        verify_status="UNVERIFIED",
+        evidence_status="VALID",
+    )
+    session.add(record)
+    session.flush()
+    gt._record_action(session, record, action="CREATE", before={}, actor_id=reviewer.id)
     session.commit()
     session.refresh(record)
     return record

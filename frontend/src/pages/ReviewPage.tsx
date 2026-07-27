@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { GtCompareDialog } from "../components/GtCompareDialog";
 import { Icon } from "../components/Icon";
+import { MissedCaseDialog } from "../components/MissedCaseDialog";
 import {
   EmptyState,
   ErrorState,
@@ -98,6 +100,8 @@ export function ReviewPage({ job }: { job: Job }) {
   const [reloadToken, setReloadToken] = useState(0);
   const [gt, setGt] = useState<GroundTruthList | null>(null);
   const [gtReload, setGtReload] = useState(0);
+  const [showCompare, setShowCompare] = useState(false);
+  const [showMissed, setShowMissed] = useState(false);
 
   useEffect(() => {
     api<ResultList>(`/api/v1/jobs/${job.id}/results`)
@@ -179,9 +183,25 @@ export function ReviewPage({ job }: { job: Job }) {
     <section className="page review-page">
       <PageHeader
         action={
-          <a className="button button-primary" href={`/api/v1/jobs/${job.id}/export.xlsx`}>
-            <Icon name="download" size={18} /> Export Excel (Plate Report)
-          </a>
+          <div className="table-actions">
+            <button
+              className="button button-secondary"
+              onClick={() => setShowMissed(true)}
+              type="button"
+            >
+              <Icon name="plus" size={18} /> Bổ sung case bỏ sót
+            </button>
+            <button
+              className="button button-secondary"
+              onClick={() => setShowCompare(true)}
+              type="button"
+            >
+              <Icon name="upload" size={18} /> Đối chiếu file GT
+            </button>
+            <a className="button button-primary" href={`/api/v1/jobs/${job.id}/export.xlsx`}>
+              <Icon name="download" size={18} /> Export Excel (Plate Report)
+            </a>
+          </div>
         }
         description={`${results.total} case model · ${results.counts.RECOGNIZED ?? 0} đọc được · ${
           results.counts.NO_PLATE ?? 0
@@ -412,6 +432,25 @@ export function ReviewPage({ job }: { job: Job }) {
             title="Không có track phù hợp"
           />
         </div>
+      )}
+
+      {showCompare && (
+        <GtCompareDialog
+          jobId={job.id}
+          onApplied={() => setGtReload((value) => value + 1)}
+          onClose={() => setShowCompare(false)}
+        />
+      )}
+
+      {showMissed && (
+        <MissedCaseDialog
+          jobId={job.id}
+          onAdded={() => {
+            setReloadToken((value) => value + 1);
+            setGtReload((value) => value + 1);
+          }}
+          onClose={() => setShowMissed(false)}
+        />
       )}
     </section>
   );

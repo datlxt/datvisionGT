@@ -111,14 +111,23 @@ export function ExportsPage({
                     </td>
                     <td>
                       <div className="row-actions">
-                        <button
-                          className="button button-secondary button-compact"
-                          disabled
-                          title="Backend chưa có API GT Final"
-                          type="button"
-                        >
-                          Chưa có API
-                        </button>
+                        {isReadyForReview(job) ? (
+                          <a
+                            className="button button-secondary button-compact"
+                            href={`/api/v1/jobs/${job.id}/export/final.xlsx`}
+                            title="Chỉ gồm case đã VERIFIED"
+                          >
+                            <Icon name="download" size={16} /> GT Final
+                          </a>
+                        ) : (
+                          <button
+                            className="button button-secondary button-compact"
+                            disabled
+                            type="button"
+                          >
+                            Chưa sẵn sàng
+                          </button>
+                        )}
                         <button
                           aria-label={`Xóa ${job.source_name}`}
                           className="icon-button icon-button-danger"

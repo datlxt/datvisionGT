@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from typing import Annotated
 
@@ -15,7 +16,16 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.export import PlateReportRow, build_plate_report_workbook, workbook_to_bytes
-from app.models import Artifact, Detection, ProcessingJob, RecognitionResult, Track
+from app.models import (
+    Artifact,
+    Detection,
+    GroundTruthRecord,
+    ProcessingJob,
+    RecognitionResult,
+    Track,
+)
+
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 router = APIRouter(prefix="/jobs", tags=["results"])
 
@@ -425,6 +435,41 @@ def get_results(job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)])
         total=len(events),
         counts=counts,
         events=events,
+    )
+
+
+@router.get("/{job_id}/export/final.xlsx")
+def export_gt_final(
+    job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)]
+) -> StreamingResponse:
+    """GT Final: only human-VERIFIED, evidence-valid, non-duplicate cases, GT text filled."""
+
+    job, events = _load_results(job_id, session)
+    records = {
+        record.track_id: record
+        for record in session.scalars(
+            select(GroundTruthRecord).where(GroundTruthRecord.job_id == job.id)
+        ).all()
+    }
+    rows: list[PlateReportRow] = []
+    for event in events:
+        record = records.get(event.track_id)
+        if (
+            record is None
+            or record.verify_status != "VERIFIED"
+            or record.evidence_status != "VALID"
+            or record.is_duplicate
+        ):
+            continue
+        row = _event_to_report_row(job.id, event)
+        rows.append(replace(row, gt_text=record.normalized_gt_text or record.gt_text or ""))
+
+    payload = workbook_to_bytes(build_plate_report_workbook(rows))
+    filename = f"{_path_safe(job.source_name)}_GT_FINAL.xlsx"
+    return StreamingResponse(
+        iter([payload]),
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

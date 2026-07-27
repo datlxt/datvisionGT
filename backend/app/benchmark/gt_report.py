@@ -35,6 +35,7 @@ class ModelEvent:
     start_ms: int
     end_ms: int
     plate: str  # normalized plate, NO_PLATE sentinel, or "" when unreadable
+    ref: str = ""  # opaque caller reference (e.g. track_id) preserved through matching
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +229,7 @@ def parse_qa_gt_xlsx(path: Path) -> list[GtEvent]:
     workbook = load_workbook(path, read_only=True, data_only=True)
     sheet = workbook.active
     rows = list(sheet.iter_rows(values_only=True))
+    workbook.close()
     header_index = None
     columns: dict[str, int] = {}
     for i, row in enumerate(rows):
@@ -275,6 +277,7 @@ def parse_plate_report_xlsx(path: Path) -> list[ModelEvent]:
     workbook = load_workbook(path, read_only=True, data_only=True)
     sheet = workbook.active
     rows = list(sheet.iter_rows(values_only=True))
+    workbook.close()
     if not rows:
         return []
     header = [("" if c is None else str(c).strip().lower()) for c in rows[0]]

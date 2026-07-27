@@ -103,6 +103,28 @@ export type GroundTruthList = {
   items: GroundTruthItem[];
 };
 
+export type GtCaseStatus = "match" | "diff" | "extra" | "missed";
+
+export type GtCaseItem = {
+  track_id: string | null;
+  track_code: string | null;
+  model_plate: string;
+  classification: string | null;
+  gt_plate: string | null;
+  quality: string | null;
+  agree: boolean;
+  status: GtCaseStatus;
+};
+
+export type GtCompareResponse = {
+  job_id: string;
+  gt_events: number;
+  model_events: number;
+  detection: Record<string, number>;
+  recognition: Record<string, number>;
+  items: GtCaseItem[];
+};
+
 export type Health = {
   status: "ok" | "degraded";
   database: string;

@@ -10,4 +10,5 @@ numpy>=2,<3
 av>=18,<19
 Pillow>=12.3,<13
 openpyxl>=3.1,<4
+python-multipart>=0.0.20,<0.1
 fast-alpr[onnx]>=0.4,<0.5
