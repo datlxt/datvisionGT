@@ -64,6 +64,8 @@ export default function App() {
 
   function navigate(next: Exclude<View, "processing">) {
     if (next === "review" && !selectedJob) return;
+    // Silently refresh job statuses (review may have flipped a job to COMPLETED).
+    if (next === "overview" || next === "exports") setReloadToken((value) => value + 1);
     setView(next);
   }
 

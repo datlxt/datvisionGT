@@ -427,13 +427,19 @@ export function ReviewPage({ job }: { job: Job }) {
                   ref={videoRef}
                   src={`/api/v1/jobs/${job.id}/source`}
                 />
-                <div className="case-timeline" title="Bản đồ case theo thời gian">
-                  <span className="ct-playhead" style={{ left: `${(videoMs / totalMs) * 100}%` }} />
+                <div
+                  className="case-timeline"
+                  onClick={seekFromClick}
+                  role="slider"
+                  aria-label="Tua video"
+                  aria-valuenow={Math.round(videoMs / 1000)}
+                  tabIndex={0}
+                  title="Click bất kỳ đâu để tua video tới đúng vị trí đó"
+                >
                   {results.events.map((event) => (
-                    <button
+                    <span
                       className={`ct-seg ct-${event.classification.toLowerCase()}`}
                       key={event.track_id}
-                      onClick={() => seekVideo(event.start_timestamp_ms)}
                       style={{
                         left: `${(event.start_timestamp_ms / totalMs) * 100}%`,
                         width: `${Math.max(
@@ -441,23 +447,19 @@ export function ReviewPage({ job }: { job: Job }) {
                           ((event.end_timestamp_ms - event.start_timestamp_ms) / totalMs) * 100,
                         )}%`,
                       }}
-                      title={`${event.track_code} · ${formatTime(event.start_timestamp_ms)}`}
-                      type="button"
                     />
                   ))}
                   {suspectedGaps.map((gap) => (
-                    <button
+                    <span
                       className="ct-gap"
                       key={gap.start}
-                      onClick={() => seekVideo(gap.start)}
                       style={{
                         left: `${(gap.start / totalMs) * 100}%`,
                         width: `${((gap.end - gap.start) / totalMs) * 100}%`,
                       }}
-                      title={`Khoảng trống ${formatTime(gap.start)}–${formatTime(gap.end)} · nghi bỏ sót`}
-                      type="button"
                     />
                   ))}
+                  <span className="ct-playhead" style={{ left: `${(videoMs / totalMs) * 100}%` }} />
                 </div>
                 <div className="ct-labels">
                   <span>0:00</span>
@@ -481,9 +483,25 @@ export function ReviewPage({ job }: { job: Job }) {
                     ))}
                   </div>
                 )}
+                <div className="ct-legend">
+                  <span>
+                    <i className="ct-sw ct-recognized" /> Đã đọc biển
+                  </span>
+                  <span>
+                    <i className="ct-sw ct-no_plate" /> Xe không biển
+                  </span>
+                  <span>
+                    <i className="ct-sw ct-low_confidence" /> Cần xem lại
+                  </span>
+                  <span>
+                    <i className="ct-gap-legend" /> Nghi bỏ sót
+                  </span>
+                  <span>
+                    <i className="ct-sw-playhead" /> Vị trí video hiện tại
+                  </span>
+                </div>
                 <p className="backend-note">
-                  Vạch màu = xe đã bắt (click nhảy tới) · gạch chéo đỏ / chip đỏ = khoảng trống nghi
-                  bỏ sót. Con trỏ ▲ = vị trí video hiện tại.
+                  Click bất kỳ đâu trên thanh để tua video tới đúng vị trí đó.
                 </p>
               </div>
             ) : (

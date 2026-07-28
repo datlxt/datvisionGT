@@ -320,8 +320,11 @@ def _merge_persisted_motion_candidates(
             (previous, event),
             key=lambda item: (
                 item.classification == "RECOGNIZED",
-                item.confidence or 0,
+                # Same normalized plate ⇒ identical text, so keep the CLEAREST crop
+                # (highest quality: sharp, well-exposed, least glare), not just the
+                # highest OCR confidence which can come from a glary frame.
                 item.quality_score or 0,
+                item.confidence or 0,
                 item.plate_detection_count,
             ),
         )

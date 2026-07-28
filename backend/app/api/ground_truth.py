@@ -9,7 +9,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.api.results import EventResult, _load_results
@@ -26,7 +26,30 @@ from app.services import ground_truth as gt
 router = APIRouter(tags=["ground-truth"])
 
 
+def _sync_job_review_status(session: Session, job_id: uuid.UUID) -> None:
+    """Move a job WAITING_FOR_REVIEW <-> COMPLETED based on remaining unresolved records."""
+
+    job = session.get(ProcessingJob, job_id)
+    if job is None or job.status not in ("WAITING_FOR_REVIEW", "COMPLETED"):
+        return
+    total = session.scalar(
+        select(func.count()).select_from(GroundTruthRecord).where(
+            GroundTruthRecord.job_id == job_id
+        )
+    )
+    unresolved = session.scalar(
+        select(func.count()).select_from(GroundTruthRecord).where(
+            GroundTruthRecord.job_id == job_id,
+            GroundTruthRecord.verify_status.in_(("UNVERIFIED", "IN_REVIEW")),
+        )
+    )
+    new_status = "COMPLETED" if total and not unresolved else "WAITING_FOR_REVIEW"
+    if job.status != new_status:
+        job.status = new_status
+
+
 def _materialize_records(session: Session, job: ProcessingJob, events: list[EventResult]) -> None:
+    current = {event.track_id for event in events}
     for event in events:
         gt.materialize_draft_record(
             session,
@@ -38,6 +61,18 @@ def _materialize_records(session: Session, job: ProcessingJob, events: list[Even
             confidence=event.confidence,
             quality_flags=event.quality_flags,
         )
+    # Self-heal: drop stale model records left by an earlier (pre-dedup) consolidation that
+    # no longer map to a shown case, so they don't block review completion. Manual additions
+    # are kept.
+    if current:
+        session.execute(
+            delete(GroundTruthRecord).where(
+                GroundTruthRecord.job_id == job.id,
+                GroundTruthRecord.record_source == "MODEL",
+                GroundTruthRecord.track_id.not_in(current),
+            )
+        )
+    _sync_job_review_status(session, job.id)
     session.commit()
 
 
@@ -142,6 +177,7 @@ def edit_ground_truth(
         note=payload.note,
         actor_id=reviewer.id,
     )
+    _sync_job_review_status(session, record.job_id)
     session.commit()
     session.refresh(record)
     return record
@@ -157,6 +193,7 @@ def verify_ground_truth(
         gt.apply_verify(session, record, reviewer=reviewer)
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    _sync_job_review_status(session, record.job_id)
     session.commit()
     session.refresh(record)
     return record
@@ -169,6 +206,7 @@ def discard_ground_truth(
     record = _get_record(session, record_id)
     reviewer = gt.get_or_create_default_reviewer(session)
     gt.apply_discard(session, record, reviewer=reviewer)
+    _sync_job_review_status(session, record.job_id)
     session.commit()
     session.refresh(record)
     return record
@@ -181,6 +219,7 @@ def restore_ground_truth(
     record = _get_record(session, record_id)
     reviewer = gt.get_or_create_default_reviewer(session)
     gt.apply_restore(session, record, reviewer=reviewer)
+    _sync_job_review_status(session, record.job_id)
     session.commit()
     session.refresh(record)
     return record
@@ -200,6 +239,7 @@ def duplicate_ground_truth(
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    _sync_job_review_status(session, record.job_id)
     session.commit()
     session.refresh(record)
     return record
@@ -375,6 +415,7 @@ def apply_ground_truth(
                 verified += 1
             except ValueError:
                 pass
+    _sync_job_review_status(session, job_id)
     session.commit()
     return GtApplyResponse(filled=filled, verified=verified)
 
@@ -425,6 +466,7 @@ def auto_verify_ground_truth(
             verified += 1
         except ValueError:
             pass
+    _sync_job_review_status(session, job.id)
     session.commit()
     return AutoVerifyResponse(verified=verified, min_confidence=payload.min_confidence)
 
@@ -528,6 +570,7 @@ def add_manual_case(
     session.add(record)
     session.flush()
     gt._record_action(session, record, action="CREATE", before={}, actor_id=reviewer.id)
+    _sync_job_review_status(session, record.job_id)
     session.commit()
     session.refresh(record)
     return record

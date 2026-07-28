@@ -101,7 +101,9 @@ export function CreateJobPage({
       body: file,
       headers: {
         "Content-Type": file.type || "application/octet-stream",
-        "X-Filename": file.name,
+        // Percent-encode: HTTP headers must be ISO-8859-1, but filenames may have
+        // Vietnamese/Unicode characters. Backend decodes it.
+        "X-Filename": encodeURIComponent(file.name),
       },
     });
     setDraft(created);

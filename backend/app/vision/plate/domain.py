@@ -460,8 +460,10 @@ def consolidate_vehicle_events(
             (previous, event),
             key=lambda item: (
                 item.classification == EventClassification.RECOGNIZED,
-                item.confidence or 0,
+                # Same normalized plate ⇒ same text, so keep the CLEAREST crop (least
+                # glare / sharpest) rather than the highest-confidence but glary one.
                 item.best_observation.quality_score,
+                item.confidence or 0,
                 item.plate_detection_count,
             ),
         )

@@ -96,7 +96,11 @@ export function OverviewPage({
                 </thead>
                 <tbody>
                   {jobs.slice(0, 8).map((job) => (
-                    <tr key={job.id}>
+                    <tr
+                      className="clickable-row"
+                      key={job.id}
+                      onClick={() => onOpen(job)}
+                    >
                       <td>
                         <div className="file-cell">
                           <Icon name="file" size={18} />
@@ -119,27 +123,19 @@ export function OverviewPage({
                         </StatusBadge>
                       </td>
                       <td>{formatDate(job.updated_at)}</td>
-                      <td>
-                        <div className="row-actions">
-                          <button
-                            aria-label={`Mở ${job.source_name}`}
-                            className="icon-button"
-                            onClick={() => onOpen(job)}
-                            title="Mở job"
-                            type="button"
-                          >
-                            <Icon name="arrow" size={18} />
-                          </button>
-                          <button
-                            aria-label={`Xóa ${job.source_name}`}
-                            className="icon-button icon-button-danger"
-                            onClick={() => deletion.request(job)}
-                            title="Xóa job"
-                            type="button"
-                          >
-                            <Icon name="trash" size={17} />
-                          </button>
-                        </div>
+                      <td className="row-action-cell">
+                        <button
+                          aria-label={`Xóa ${job.source_name}`}
+                          className="icon-button icon-button-danger"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            deletion.request(job);
+                          }}
+                          title="Xóa job"
+                          type="button"
+                        >
+                          <Icon name="trash" size={17} />
+                        </button>
                       </td>
                     </tr>
                   ))}

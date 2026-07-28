@@ -7,6 +7,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
@@ -80,7 +81,7 @@ async def create_job(
     session: Annotated[Session, Depends(get_db)],
 ) -> ProcessingJob:
     settings = get_settings()
-    filename = _safe_filename(filename_header)
+    filename = _safe_filename(unquote(filename_header))
     extension = Path(filename).suffix.lower()
     if extension not in VIDEO_EXTENSIONS:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Unsupported video format")
