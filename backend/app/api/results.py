@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from dataclasses import replace
 from pathlib import Path
 from typing import Annotated
 
@@ -15,7 +14,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.export import PlateReportRow, build_plate_report_workbook, workbook_to_bytes
+from app.export import (
+    GtFinalRow,
+    PlateReportRow,
+    build_gt_final_workbook,
+    build_plate_report_workbook,
+    workbook_to_bytes,
+)
 from app.models import (
     Artifact,
     Detection,
@@ -451,7 +456,7 @@ def export_gt_final(
             select(GroundTruthRecord).where(GroundTruthRecord.job_id == job.id)
         ).all()
     }
-    rows: list[PlateReportRow] = []
+    rows: list[GtFinalRow] = []
     for event in events:
         record = records.get(event.track_id)
         if (
@@ -461,10 +466,19 @@ def export_gt_final(
             or record.is_duplicate
         ):
             continue
-        row = _event_to_report_row(job.id, event)
-        rows.append(replace(row, gt_text=record.normalized_gt_text or record.gt_text or ""))
+        rows.append(
+            GtFinalRow(
+                gt_text=record.normalized_gt_text or record.gt_text or "",
+                classification=event.classification,
+                start_ms=event.start_timestamp_ms,
+                end_ms=event.end_timestamp_ms,
+                quality=record.classification or "",
+                full_frame_path=_evidence_path(job.id, "frames", event.full_frame_url),
+                crop_path=_evidence_path(job.id, "crops", event.plate_crop_url),
+            )
+        )
 
-    payload = workbook_to_bytes(build_plate_report_workbook(rows))
+    payload = workbook_to_bytes(build_gt_final_workbook(rows))
     filename = f"{_path_safe(job.source_name)}_GT_FINAL.xlsx"
     return StreamingResponse(
         iter([payload]),
@@ -552,7 +566,9 @@ def _evidence_path(job_id: uuid.UUID, folder: str, url: str | None) -> Path | No
     return candidate
 
 
-def _event_to_report_row(job_id: uuid.UUID, event: EventResult) -> PlateReportRow:
+def _event_to_report_row(
+    job_id: uuid.UUID, event: EventResult, quality: str = ""
+) -> PlateReportRow:
     if event.classification == "NO_PLATE":
         plate_text = "LPN_NO_PLATE_VEHICLE"
     else:
@@ -566,6 +582,7 @@ def _event_to_report_row(job_id: uuid.UUID, event: EventResult) -> PlateReportRo
         crop_path=_evidence_path(job_id, "crops", event.plate_crop_url),
         track_code=event.track_code,
         classification=event.classification,
+        quality=quality,
         full_frame_path=_evidence_path(job_id, "frames", event.full_frame_url),
     )
 
@@ -575,7 +592,16 @@ def export_results_xlsx(
     job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)]
 ) -> StreamingResponse:
     job, events = _load_results(job_id, session)
-    rows = [_event_to_report_row(job.id, event) for event in events]
+    quality_by_track = {
+        record.track_id: record.classification or ""
+        for record in session.scalars(
+            select(GroundTruthRecord).where(GroundTruthRecord.job_id == job.id)
+        ).all()
+    }
+    rows = [
+        _event_to_report_row(job.id, event, quality_by_track.get(event.track_id, ""))
+        for event in events
+    ]
     payload = workbook_to_bytes(build_plate_report_workbook(rows))
     filename = f"{_path_safe(job.source_name)}_plate_report.xlsx"
     return StreamingResponse(

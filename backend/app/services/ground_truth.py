@@ -165,7 +165,9 @@ def materialize_draft_record(
         record_source="MODEL",
         predicted_text=draft_prediction_text(classification, normalized_plate),
         prediction_confidence=confidence,
-        classification=classification,
+        # classification stores the human quality label (README §19). Only the deterministic
+        # no-plate case is pre-filled; the reviewer picks the rest from the taxonomy.
+        classification="Xe không biển" if classification == "NO_PLATE" else None,
         quality_flags=list(quality_flags),
         verify_status="UNVERIFIED",
         evidence_status="VALID",

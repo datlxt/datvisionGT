@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -378,6 +379,56 @@ def apply_ground_truth(
     return GtApplyResponse(filled=filled, verified=verified)
 
 
+class AutoVerifyRequest(BaseModel):
+    min_confidence: float = 0.95
+
+
+class AutoVerifyResponse(BaseModel):
+    verified: int
+    min_confidence: float
+
+
+@router.post("/jobs/{job_id}/ground-truth/auto-verify", response_model=AutoVerifyResponse)
+def auto_verify_ground_truth(
+    job_id: uuid.UUID,
+    payload: AutoVerifyRequest,
+    session: Annotated[Session, Depends(get_db)],
+) -> AutoVerifyResponse:
+    """Reviewer-triggered fast-track: accept the model reading as GT and verify every
+    high-confidence RECOGNIZED case in one pass. Low-confidence / unreadable / no-plate
+    cases are left for a human to check (confidence is not correctness — README §4.2)."""
+
+    job, events = _load_results(job_id, session)
+    _materialize_records(session, job, events)
+    reviewer = gt.get_or_create_default_reviewer(session)
+    verified = 0
+    for event in events:
+        if (
+            event.classification != "RECOGNIZED"
+            or event.confidence is None
+            or event.confidence < payload.min_confidence
+            or not event.normalized_plate
+        ):
+            continue
+        record = session.scalar(
+            select(GroundTruthRecord).where(
+                GroundTruthRecord.job_id == job.id,
+                GroundTruthRecord.track_id == event.track_id,
+            )
+        )
+        if record is None or record.verify_status == "VERIFIED":
+            continue
+        gt.apply_edit(session, record, gt_text=event.normalized_plate, actor_id=reviewer.id)
+        record.quality_flags = sorted({*record.quality_flags, "AUTO_VERIFIED_HIGH_CONFIDENCE"})
+        try:
+            gt.apply_verify(session, record, reviewer=reviewer)
+            verified += 1
+        except ValueError:
+            pass
+    session.commit()
+    return AutoVerifyResponse(verified=verified, min_confidence=payload.min_confidence)
+
+
 # --------------------------------------------------------------------------- #
 # Add a case the model missed. Anchored to the nearest real evidence frame so
 # it stays evidence-backed (contract rule #3), no synthetic data.
@@ -453,6 +504,7 @@ def add_manual_case(
     session.add(detection)
     session.flush()
 
+    gt_text = NO_PLATE if no_plate else payload.gt_text.strip()
     record = GroundTruthRecord(
         job_id=job.id,
         track_id=track.id,
@@ -461,13 +513,17 @@ def add_manual_case(
         record_source="MANUAL",
         predicted_text=None,
         prediction_confidence=None,
-        gt_text=None if no_plate else payload.gt_text.strip(),
-        normalized_gt_text=None if no_plate else gt.normalize_gt_text(payload.gt_text),
+        gt_text=gt_text,
+        normalized_gt_text=gt.normalize_gt_text(gt_text),
         classification="MANUAL_ADDITION",
         note=payload.note or None,
         quality_flags=["MANUAL_ADDITION"],
-        verify_status="UNVERIFIED",
+        # A human adding a missed case is asserting ground truth, so it is verified on the
+        # spot and flows straight into GT Final (which only takes VERIFIED records).
+        verify_status="VERIFIED",
         evidence_status="VALID",
+        verified_by=reviewer.id,
+        verified_at=datetime.now(UTC),
     )
     session.add(record)
     session.flush()

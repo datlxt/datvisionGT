@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { GtCompareDialog } from "../components/GtCompareDialog";
 import { Icon } from "../components/Icon";
@@ -37,6 +37,19 @@ function verifyTone(status: GroundTruthRecord["verify_status"]) {
   return "neutral" as const;
 }
 
+const QUALITY_OPTIONS = [
+  "Biển đẹp bình thường",
+  "Biển bẩn",
+  "Biển cũ, xước, mờ",
+  "Biển bị che vật lý",
+  "Biển bị dán (icon, decal, trang trí...)",
+  "Biển bị chói sáng",
+  "Biển giả mạo (che 1 vài số, dán biển khác lên...)",
+  "Biển biến dạng vật lý (cong, vênh)",
+  "Biển bóng của vật thể che khuất",
+  "Xe không biển",
+];
+
 function patchGt(recordId: string, body: Record<string, unknown>) {
   return api<GroundTruthRecord>(`/api/v1/ground-truth/${recordId}`, {
     method: "PATCH",
@@ -49,7 +62,7 @@ function actionGt(recordId: string, action: "verify" | "discard" | "restore") {
   return api<GroundTruthRecord>(`/api/v1/ground-truth/${recordId}/${action}`, { method: "POST" });
 }
 
-type Filter = "ALL" | "RECOGNIZED" | "REVIEW" | "NO_PLATE";
+type Filter = "ALL" | "RECOGNIZED" | "REVIEW" | "NO_PLATE" | "CHECK";
 
 function confidence(value: number | null) {
   return value === null ? "Chưa có dữ liệu" : `${Math.round(value * 100)}%`;
@@ -91,6 +104,11 @@ function classificationTone(event: EventResult) {
   return "neutral" as const;
 }
 
+function toClock(ms: number): string {
+  const total = Math.floor(Math.max(0, ms) / 1000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
 export function ReviewPage({ job }: { job: Job }) {
   const [results, setResults] = useState<ResultList | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -101,6 +119,12 @@ export function ReviewPage({ job }: { job: Job }) {
   const [gt, setGt] = useState<GroundTruthList | null>(null);
   const [gtReload, setGtReload] = useState(0);
   const [showCompare, setShowCompare] = useState(false);
+  const [evidenceTab, setEvidenceTab] = useState<"frame" | "video">("frame");
+  const [autoThreshold, setAutoThreshold] = useState(95);
+  const [autoBusy, setAutoBusy] = useState(false);
+  const [autoResult, setAutoResult] = useState<number | null>(null);
+  const [videoMs, setVideoMs] = useState(0);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [showMissed, setShowMissed] = useState(false);
 
   useEffect(() => {
@@ -143,9 +167,71 @@ export function ReviewPage({ job }: { job: Job }) {
           event.classification === "UNREADABLE"
         );
       }
+      if (filter === "CHECK") {
+        return gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED";
+      }
       return true;
     });
-  }, [filter, query, results]);
+  }, [filter, query, results, gtByTrack]);
+
+  const needCheckCount =
+    results?.events.filter(
+      (event) => gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED",
+    ).length ?? 0;
+
+  const totalMs = Math.max(
+    job.duration_ms ?? 0,
+    ...(results?.events.map((event) => event.end_timestamp_ms) ?? [0]),
+    1,
+  );
+
+  // Gaps between consecutive cases where no vehicle was published — the prime spots to
+  // scrub for a missed vehicle instead of watching the whole clip.
+  const suspectedGaps = useMemo(() => {
+    const ordered = [...(results?.events ?? [])].sort(
+      (a, b) => a.start_timestamp_ms - b.start_timestamp_ms,
+    );
+    const gaps: { start: number; end: number }[] = [];
+    let cursor = 0;
+    for (const event of ordered) {
+      if (event.start_timestamp_ms - cursor >= 6_000) {
+        gaps.push({ start: cursor, end: event.start_timestamp_ms });
+      }
+      cursor = Math.max(cursor, event.end_timestamp_ms);
+    }
+    if (totalMs - cursor >= 6_000) gaps.push({ start: cursor, end: totalMs });
+    return gaps;
+  }, [results, totalMs]);
+
+  function seekVideo(ms: number) {
+    if (videoRef.current) {
+      setEvidenceTab("video");
+      videoRef.current.currentTime = ms / 1000;
+    }
+  }
+
+  function seekFromClick(event: React.MouseEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    seekVideo(ratio * totalMs);
+  }
+
+  function runAutoVerify() {
+    setAutoBusy(true);
+    api<{ verified: number }>(`/api/v1/jobs/${job.id}/ground-truth/auto-verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ min_confidence: autoThreshold / 100 }),
+    })
+      .then((result) => {
+        setGtReload((value) => value + 1);
+        setAutoResult(result.verified);
+      })
+      .catch((reason: unknown) =>
+        window.alert(reason instanceof Error ? reason.message : "Không tự duyệt được."),
+      )
+      .finally(() => setAutoBusy(false));
+  }
 
   const selected =
     results?.events.find((event) => event.track_id === selectedId) ??
@@ -156,6 +242,13 @@ export function ReviewPage({ job }: { job: Job }) {
     : -1;
   const selectedGt = selected ? gtByTrack.get(selected.track_id) ?? null : null;
   const suspected = results?.events.filter(isSuspectedNoPlate).length ?? 0;
+  const selectedStartMs = selected?.start_timestamp_ms ?? 0;
+
+  useEffect(() => {
+    if (evidenceTab === "video" && videoRef.current) {
+      videoRef.current.currentTime = selectedStartMs / 1000;
+    }
+  }, [selectedStartMs, evidenceTab]);
 
   if (error) {
     return (
@@ -183,25 +276,9 @@ export function ReviewPage({ job }: { job: Job }) {
     <section className="page review-page">
       <PageHeader
         action={
-          <div className="table-actions">
-            <button
-              className="button button-secondary"
-              onClick={() => setShowMissed(true)}
-              type="button"
-            >
-              <Icon name="plus" size={18} /> Bổ sung case bỏ sót
-            </button>
-            <button
-              className="button button-secondary"
-              onClick={() => setShowCompare(true)}
-              type="button"
-            >
-              <Icon name="upload" size={18} /> Đối chiếu file GT
-            </button>
-            <a className="button button-primary" href={`/api/v1/jobs/${job.id}/export.xlsx`}>
-              <Icon name="download" size={18} /> Export Excel (Plate Report)
-            </a>
-          </div>
+          <a className="button button-primary" href={`/api/v1/jobs/${job.id}/export.xlsx`}>
+            <Icon name="download" size={18} /> Export Excel
+          </a>
         }
         description={`${results.total} case model · ${results.counts.RECOGNIZED ?? 0} đọc được · ${
           results.counts.NO_PLATE ?? 0
@@ -209,6 +286,44 @@ export function ReviewPage({ job }: { job: Job }) {
         eyebrow={job.job_code}
         title={job.source_name}
       />
+
+      <div className="review-actions card">
+        <div className="auto-verify">
+          <label htmlFor="auto-th">Tự duyệt ≥</label>
+          <input
+            id="auto-th"
+            max={100}
+            min={50}
+            onChange={(event) => setAutoThreshold(Number(event.target.value))}
+            type="number"
+            value={autoThreshold}
+          />
+          <span>%</span>
+          <button
+            className="button button-primary button-compact"
+            disabled={autoBusy}
+            onClick={runAutoVerify}
+            type="button"
+          >
+            <Icon name="check" size={16} /> {autoBusy ? "Đang duyệt…" : "Tự duyệt"}
+          </button>
+        </div>
+        <div className="review-actions-spacer" />
+        <button
+          className="button button-secondary button-compact"
+          onClick={() => setShowMissed(true)}
+          type="button"
+        >
+          <Icon name="plus" size={16} /> Bổ sung case bỏ sót
+        </button>
+        <button
+          className="button button-secondary button-compact"
+          onClick={() => setShowCompare(true)}
+          type="button"
+        >
+          <Icon name="upload" size={16} /> Đối chiếu file GT
+        </button>
+      </div>
 
       <div className="review-toolbar card">
         <label>
@@ -229,6 +344,7 @@ export function ReviewPage({ job }: { job: Job }) {
               (results.counts.LOW_CONFIDENCE ?? 0) + (results.counts.UNREADABLE ?? 0),
             ],
             ["NO_PLATE", "Không biển", results.counts.NO_PLATE ?? 0],
+            ["CHECK", "Cần kiểm tra", needCheckCount],
           ].map(([value, label, count]) => (
             <button
               className={filter === value ? "active" : ""}
@@ -281,8 +397,19 @@ export function ReviewPage({ job }: { job: Job }) {
 
           <section className="card evidence-panel">
             <div className="evidence-tabs">
-              <button className="active" type="button">
+              <button
+                className={evidenceTab === "frame" ? "active" : ""}
+                onClick={() => setEvidenceTab("frame")}
+                type="button"
+              >
                 Full frame
+              </button>
+              <button
+                className={evidenceTab === "video" ? "active" : ""}
+                onClick={() => setEvidenceTab("video")}
+                type="button"
+              >
+                Video
               </button>
               <button disabled title="Không có API frame lân cận" type="button">
                 Frame lân cận
@@ -290,6 +417,76 @@ export function ReviewPage({ job }: { job: Job }) {
               <span>Evidence Viewer</span>
             </div>
 
+            {evidenceTab === "video" ? (
+              <div className="evidence-video">
+                <video
+                  controls
+                  onTimeUpdate={(event) =>
+                    setVideoMs(Math.round(event.currentTarget.currentTime * 1000))
+                  }
+                  ref={videoRef}
+                  src={`/api/v1/jobs/${job.id}/source`}
+                />
+                <div className="case-timeline" title="Bản đồ case theo thời gian">
+                  <span className="ct-playhead" style={{ left: `${(videoMs / totalMs) * 100}%` }} />
+                  {results.events.map((event) => (
+                    <button
+                      className={`ct-seg ct-${event.classification.toLowerCase()}`}
+                      key={event.track_id}
+                      onClick={() => seekVideo(event.start_timestamp_ms)}
+                      style={{
+                        left: `${(event.start_timestamp_ms / totalMs) * 100}%`,
+                        width: `${Math.max(
+                          0.5,
+                          ((event.end_timestamp_ms - event.start_timestamp_ms) / totalMs) * 100,
+                        )}%`,
+                      }}
+                      title={`${event.track_code} · ${formatTime(event.start_timestamp_ms)}`}
+                      type="button"
+                    />
+                  ))}
+                  {suspectedGaps.map((gap) => (
+                    <button
+                      className="ct-gap"
+                      key={gap.start}
+                      onClick={() => seekVideo(gap.start)}
+                      style={{
+                        left: `${(gap.start / totalMs) * 100}%`,
+                        width: `${((gap.end - gap.start) / totalMs) * 100}%`,
+                      }}
+                      title={`Khoảng trống ${formatTime(gap.start)}–${formatTime(gap.end)} · nghi bỏ sót`}
+                      type="button"
+                    />
+                  ))}
+                </div>
+                <div className="ct-labels">
+                  <span>0:00</span>
+                  <span className="ct-now">▶ {formatTime(videoMs)}</span>
+                  <span>{formatTime(totalMs)}</span>
+                </div>
+                {suspectedGaps.length > 0 && (
+                  <div className="ct-gaps-list">
+                    <span className="ct-gaps-title">
+                      <span className="ct-gap-legend" /> Nghi bỏ sót ({suspectedGaps.length}):
+                    </span>
+                    {suspectedGaps.map((gap) => (
+                      <button
+                        className="ct-gap-chip"
+                        key={gap.start}
+                        onClick={() => seekVideo(gap.start)}
+                        type="button"
+                      >
+                        {formatTime(gap.start)}–{formatTime(gap.end)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <p className="backend-note">
+                  Vạch màu = xe đã bắt (click nhảy tới) · gạch chéo đỏ / chip đỏ = khoảng trống nghi
+                  bỏ sót. Con trỏ ▲ = vị trí video hiện tại.
+                </p>
+              </div>
+            ) : (
             <div className="full-frame">
               <img alt={`Full frame ${selected.track_code}`} src={selected.full_frame_url} />
               <span className="frame-stamp">
@@ -317,6 +514,7 @@ export function ReviewPage({ job }: { job: Job }) {
                 </>
               )}
             </div>
+            )}
 
             <div className="evidence-bottom">
               <div className="best-crop">
@@ -442,8 +640,55 @@ export function ReviewPage({ job }: { job: Job }) {
         />
       )}
 
+      {autoResult !== null && (
+        <div className="modal-overlay" onClick={() => setAutoResult(null)} role="presentation">
+          <div
+            aria-label="Kết quả tự duyệt"
+            aria-modal="true"
+            className="modal-card"
+            onClick={(event) => event.stopPropagation()}
+            role="alertdialog"
+          >
+            <span className="modal-icon modal-icon-success">
+              <Icon name="check" size={26} />
+            </span>
+            <h3>Đã tự duyệt xong</h3>
+            <p>
+              Tự duyệt <strong>{autoResult}</strong> case đọc được (OCR vote ≥ {autoThreshold}%).
+              Còn <strong>{needCheckCount}</strong> case ở tab{" "}
+              <strong>&quot;Cần kiểm tra&quot;</strong> cần bạn soát tay bằng video.
+            </p>
+            <div className="modal-actions">
+              <button
+                className="button button-secondary"
+                onClick={() => setAutoResult(null)}
+                type="button"
+              >
+                Đóng
+              </button>
+              <button
+                className="button button-primary"
+                disabled={needCheckCount === 0}
+                onClick={() => {
+                  setFilter("CHECK");
+                  setAutoResult(null);
+                }}
+                type="button"
+              >
+                Xem “Cần kiểm tra” ({needCheckCount})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showMissed && (
         <MissedCaseDialog
+          defaultTimestamp={toClock(
+            evidenceTab === "video" && videoRef.current
+              ? videoRef.current.currentTime * 1000
+              : selectedStartMs,
+          )}
           jobId={job.id}
           onAdded={() => {
             setReloadToken((value) => value + 1);
@@ -465,6 +710,7 @@ function GtPanel({
 }) {
   const [gtText, setGtText] = useState(record?.gt_text ?? record?.predicted_text ?? "");
   const [note, setNote] = useState(record?.note ?? "");
+  const [quality, setQuality] = useState(record?.classification ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -493,10 +739,11 @@ function GtPanel({
       .finally(() => setBusy(false));
   };
 
-  const save = () => run(() => patchGt(record.id, { gt_text: gtText, note }));
+  const save = () =>
+    run(() => patchGt(record.id, { gt_text: gtText, note, classification: quality }));
   const verify = () =>
     run(async () => {
-      await patchGt(record.id, { gt_text: gtText, note });
+      await patchGt(record.id, { gt_text: gtText, note, classification: quality });
       await actionGt(record.id, "verify");
     });
   const discard = () => run(() => actionGt(record.id, "discard"));
@@ -523,6 +770,17 @@ function GtPanel({
           placeholder="Nhập biển số đúng"
           value={gtText}
         />
+      </label>
+      <label>
+        Phân loại chất lượng biển (nhìn crop)
+        <select onChange={(event) => setQuality(event.target.value)} value={quality}>
+          <option value="">— Chọn phân loại —</option>
+          {QUALITY_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
       </label>
       <label>
         Ghi chú kiểm duyệt

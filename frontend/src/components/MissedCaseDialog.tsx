@@ -14,16 +14,18 @@ function parseTimestamp(value: string): number | null {
 
 export function MissedCaseDialog({
   jobId,
+  defaultTimestamp = "",
   onClose,
   onAdded,
 }: {
   jobId: string;
+  defaultTimestamp?: string;
   onClose: () => void;
   onAdded: () => void;
 }) {
   const [noPlate, setNoPlate] = useState(false);
   const [plate, setPlate] = useState("");
-  const [timestamp, setTimestamp] = useState("");
+  const [timestamp, setTimestamp] = useState(defaultTimestamp);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -74,7 +76,8 @@ export function MissedCaseDialog({
         </span>
         <h3>Bổ sung case bỏ sót</h3>
         <p>
-          Thêm 1 lượt xe model bỏ sót. Case được neo vào frame evidence gần thời điểm bạn nhập nhất.
+          Thêm 1 lượt xe model bỏ sót. Thời điểm điền sẵn theo vị trí video đang tua; case được
+          neo vào frame evidence thật gần thời điểm đó nhất.
         </p>
 
         <div className="missed-form">

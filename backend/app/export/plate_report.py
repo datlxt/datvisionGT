@@ -94,6 +94,7 @@ class PlateReportRow:
     crop_path: Path | None = None
     track_code: str = ""
     classification: str = ""
+    quality: str = ""  # reviewer-picked quality label; falls back to the no-plate default
     full_frame_path: Path | None = None
 
 
@@ -173,7 +174,7 @@ def build_plate_report_workbook(rows: list[PlateReportRow]) -> Workbook:
             _COL["STT"]: position,
             _COL["TrackID"]: row.track_code,
             _COL["Plate model đọc"]: row.plate_text,
-            _COL["Phân loại"]: quality_prefill(row.classification),
+            _COL["Phân loại"]: row.quality or quality_prefill(row.classification),
             _COL["GT Plate"]: row.gt_text,
             _COL["Start"]: format_timestamp(row.start_ms),
             _COL["End"]: format_timestamp(row.end_ms),
