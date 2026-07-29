@@ -4,10 +4,12 @@ from app.vision.plate.domain import (
     EventClassification,
     FrameObservation,
     VehicleTrack,
+    coerce_to_plate_grammar,
     consolidate_vehicle_events,
     finalize_vehicle_track,
     is_plausible_vietnamese_plate,
     normalize_vietnamese_plate,
+    plate_key,
 )
 from app.vision.plate.fastalpr_adapter import plate_quality_score
 from app.vision.plate.interfaces import PlateDetection, PlateReading, VehicleDetection
@@ -108,6 +110,48 @@ def test_ocr_words_and_numeric_noise_are_not_valid_vietnamese_plates() -> None:
         "VEHICLE_000001", [observation(1, with_plate=True, text="OUT")]
     )
     assert finalize_vehicle_track(track).classification == EventClassification.UNREADABLE
+
+
+def test_grammar_repair_fixes_cross_class_glyph_swaps() -> None:
+    # Province (idx 0-1) and number block (idx 4+) are always digits: a letter there is
+    # an OCR swap, so Z->2, B->8, S->5 etc. are safe. The series head (idx 2) is a letter.
+    assert coerce_to_plate_grammar("29G12545Z") == "29G125452"  # Z->2 in the number
+    assert coerce_to_plate_grammar("B9G125457") == "89G125457"  # B->8 in the province
+    assert plate_key("Z9-X2 014.82") == "29X201482"  # normalize + repair together
+    # A legal plate must never be corrupted (idx 3 series digit stays a digit).
+    assert coerce_to_plate_grammar("29G125457") == "29G125457"
+
+
+def test_grammar_repair_rescues_a_misread_frame_that_would_be_filtered() -> None:
+    # "Z9X201482" (province 2 read as Z) previously failed the plausibility gate and was
+    # dropped; grammar repair now recovers the real plate from that single frame.
+    track = VehicleTrack(
+        "VEHICLE_000001",
+        [observation(1, with_plate=True, text="Z9X201482")],
+    )
+    result = finalize_vehicle_track(track)
+    assert result.normalized_plate == "29X201482"
+
+
+def test_per_character_vote_reconstructs_plate_no_single_frame_read() -> None:
+    # No frame read the whole plate correctly, and each wrong frame errs in a different
+    # position, so whole-string voting would tie. Per-position voting, weighted by each
+    # glyph's confidence, still reconstructs the true "29X201482".
+    high = (0.95,) * 9
+    blurred_last = (0.95,) * 8 + (0.15,)
+    blurred_series = (0.95, 0.95, 0.95, 0.15) + (0.95,) * 5
+    track = VehicleTrack(
+        "VEHICLE_000001",
+        [
+            observation(1, with_plate=True, text="29X201482", character_confidences=high),
+            observation(2, with_plate=True, text="29X201482", character_confidences=high),
+            observation(3, with_plate=True, text="29X201489", character_confidences=blurred_last),
+            observation(4, with_plate=True, text="29X901482", character_confidences=blurred_series),
+        ],
+    )
+    result = finalize_vehicle_track(track)
+    assert result.normalized_plate == "29X201482"
+    assert result.classification == EventClassification.RECOGNIZED
 
 
 def test_single_ocr_reading_remains_low_confidence() -> None:

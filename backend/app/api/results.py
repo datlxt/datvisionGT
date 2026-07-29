@@ -304,6 +304,29 @@ def _merge_persisted_motion_candidates(
             }
         )
 
+    # A single garbled OCR frame during another vehicle's pass gets spun into its own
+    # 1-frame track carrying a wildly different plate string (e.g. 89C111522 misread as
+    # 01E111573). Edit-distance dedup can't bridge that jump, but a lone plated frame
+    # whose whole span sits inside a longer, higher-confidence plated event with a
+    # different reading is the same physical bike — it cannot be in two places at once.
+    plated_events = [event for event in variant_merged if event.plate_detection_count > 0]
+    variant_merged = [
+        event
+        for event in variant_merged
+        if not (
+            event.plate_detection_count <= 1
+            and any(
+                other is not event
+                and other.plate_detection_count > event.plate_detection_count
+                and other.normalized_plate != event.normalized_plate
+                and other.start_timestamp_ms <= event.start_timestamp_ms
+                and event.end_timestamp_ms <= other.end_timestamp_ms
+                and (other.confidence or 0) >= (event.confidence or 0)
+                for other in plated_events
+            )
+        )
+    ]
+
     unique_events: list[EventResult] = []
     plate_index: dict[str, int] = {}
     for event in variant_merged:

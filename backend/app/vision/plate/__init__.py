@@ -3,8 +3,10 @@ from app.vision.plate.domain import (
     FrameObservation,
     VehicleEventResult,
     VehicleTrack,
+    coerce_to_plate_grammar,
     finalize_vehicle_track,
     normalize_vietnamese_plate,
+    plate_key,
 )
 from app.vision.plate.interfaces import (
     PlateDetection,
@@ -28,6 +30,8 @@ __all__ = [
     "VehicleDetector",
     "VehicleEventResult",
     "VehicleTrack",
+    "coerce_to_plate_grammar",
     "finalize_vehicle_track",
     "normalize_vietnamese_plate",
+    "plate_key",
 ]

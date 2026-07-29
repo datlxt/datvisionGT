@@ -12,8 +12,8 @@ from app.vision.plate.domain import (
     consolidate_vehicle_events,
     finalize_vehicle_track,
     is_plausible_vietnamese_plate,
-    normalize_vietnamese_plate,
     plate_belongs_to_vehicle,
+    plate_key,
 )
 from app.vision.plate.fastalpr_adapter import crop_bgr, plate_quality_score
 from app.vision.plate.interfaces import (
@@ -131,11 +131,8 @@ class MotorcyclePlatePipeline:
                 continue
             crop = crop_bgr(frame.bgr, plate.bbox)
             reading = self.plate_recognizer.recognize(crop)
-            if (
-                reading is None
-                or not is_plausible_vietnamese_plate(
-                    normalize_vietnamese_plate(reading.raw_text)
-                )
+            if reading is None or not is_plausible_vietnamese_plate(
+                plate_key(reading.raw_text)
             ):
                 continue
             plate_width = plate.bbox[2] - plate.bbox[0]

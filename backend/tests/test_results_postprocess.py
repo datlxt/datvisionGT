@@ -116,3 +116,43 @@ def test_adjacent_persisted_ocr_variants_are_one_record() -> None:
     assert len(results) == 1
     assert results[0].normalized_plate == "29X201482"
     assert "MERGED_NEAR_OCR_VARIANT" in results[0].quality_flags
+
+
+def test_single_frame_misread_inside_a_pass_is_dropped() -> None:
+    # A garbled single frame (01E111573) sits fully inside a longer, confident pass
+    # (89C111522). The two reads are too far apart for edit-distance dedup, but one
+    # bike cannot be in two places at once, so the phantom fragment is suppressed.
+    results = _merge_persisted_motion_candidates(
+        [
+            event(
+                "VEHICLE_7",
+                start_ms=18_280,
+                end_ms=27_280,
+                plate="89C111522",
+                detections=8,
+            ),
+            event(
+                "VEHICLE_9",
+                start_ms=19_000,
+                end_ms=19_000,
+                plate="01E111573",
+                detections=1,
+            ),
+        ]
+    )
+    assert len(results) == 1
+    assert results[0].normalized_plate == "89C111522"
+    assert results[0].start_timestamp_ms == 18_280
+    assert results[0].end_timestamp_ms == 27_280
+
+
+def test_two_short_distinct_bikes_are_not_merged_as_fragments() -> None:
+    # Guard: two genuinely different plated passes that do not temporally contain each
+    # other must both survive — containment (not mere adjacency) marks a phantom.
+    results = _merge_persisted_motion_candidates(
+        [
+            event("VEHICLE_1", start_ms=1_000, end_ms=2_000, plate="30A11111", detections=1),
+            event("VEHICLE_2", start_ms=9_000, end_ms=10_000, plate="51B22222", detections=1),
+        ]
+    )
+    assert len(results) == 2

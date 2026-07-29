@@ -69,6 +69,58 @@ def is_plausible_vietnamese_plate(value: str) -> bool:
     return bool(re.fullmatch(r"\d{2}[A-Z][A-Z0-9]\d{4,5}", value))
 
 
+# Position-aware OCR confusion repair. A Vietnamese motorcycle plate is
+# `\d{2}[A-Z][A-Z0-9]\d{4,5}`: the province (idx 0-1) and the number block (idx 4+) are
+# ALWAYS digits, and the series head (idx 2) is ALWAYS a letter. A blurry frame swaps
+# visually identical glyphs across those classes (Z<->2, S<->5, B<->8, G<->6, O/D/Q<->0,
+# I/L<->1, A<->4, T<->7). Coercing only the CROSS-CLASS positions is safe: a legal plate
+# can never hold a letter where a digit is mandated, so the repair can only move a misread
+# toward a legal plate, never corrupt a legal one. Same-class swaps (E<->F, 2<->7) are left
+# to the per-character track vote, which a single blurry frame cannot outweigh.
+_LETTER_TO_DIGIT = {
+    "O": "0",
+    "D": "0",
+    "Q": "0",
+    "I": "1",
+    "L": "1",
+    "Z": "2",
+    "A": "4",
+    "S": "5",
+    "G": "6",
+    "T": "7",
+    "B": "8",
+}
+_DIGIT_TO_LETTER = {
+    "0": "D",
+    "2": "Z",
+    "4": "A",
+    "5": "S",
+    "6": "G",
+    "8": "B",
+}
+
+
+def coerce_to_plate_grammar(value: str) -> str:
+    """Repair cross-class OCR glyph swaps using the fixed plate layout classes."""
+
+    if len(value) not in (8, 9):
+        return value
+    chars = list(value)
+    chars[0] = _LETTER_TO_DIGIT.get(chars[0], chars[0])
+    chars[1] = _LETTER_TO_DIGIT.get(chars[1], chars[1])
+    chars[2] = _DIGIT_TO_LETTER.get(chars[2], chars[2])
+    # idx 3 is [A-Z0-9] (the series can be 1 or 2 glyphs), so its class is ambiguous — leave it.
+    for index in range(4, len(chars)):
+        chars[index] = _LETTER_TO_DIGIT.get(chars[index], chars[index])
+    return "".join(chars)
+
+
+def plate_key(text: str) -> str:
+    """Normalized, grammar-repaired plate string; the identity key for one OCR read."""
+
+    return coerce_to_plate_grammar(normalize_vietnamese_plate(text))
+
+
 def bbox_iou(left: BBox, right: BBox) -> float:
     x1 = max(left[0], right[0])
     y1 = max(left[1], right[1])
@@ -94,31 +146,55 @@ def plate_belongs_to_vehicle(plate: BBox, vehicle: BBox) -> bool:
 
 
 def vote_plate(readings: list[tuple[PlateReading, float]]) -> tuple[str, str, float] | None:
-    """Confidence/quality weighted track vote, more stable than single-frame OCR."""
+    """Per-character, confidence/quality weighted track vote.
 
-    candidates: dict[str, float] = defaultdict(float)
-    raw_by_normalized: dict[str, tuple[str, float]] = {}
+    Voting each position independently (instead of the whole string) lets a sharp frame
+    outvote a blurry one glyph-by-glyph, so a single smeared character no longer splits
+    the tally into two losing candidates. Each read is first grammar-repaired via
+    ``plate_key`` so cross-class misreads (Z->2, etc.) already agree before the vote.
+    """
+
+    scored: list[tuple[PlateReading, str, float]] = []
     for reading, quality in readings:
-        normalized = normalize_vietnamese_plate(reading.raw_text)
-        if not is_plausible_vietnamese_plate(normalized):
+        key = plate_key(reading.raw_text)
+        if not is_plausible_vietnamese_plate(key):
             continue
         weight = max(0.0, reading.confidence) * max(0.05, quality)
-        candidates[normalized] += weight
-        if normalized not in raw_by_normalized or weight > raw_by_normalized[normalized][1]:
-            raw_by_normalized[normalized] = (reading.raw_text, weight)
-    if not candidates:
+        scored.append((reading, key, weight))
+    if not scored:
         return None
-    winner, winner_weight = max(candidates.items(), key=lambda item: item[1])
-    total = sum(candidates.values())
-    agreement = winner_weight / total if total else 0.0
-    winner_readings = [
-        reading.confidence
-        for reading, _ in readings
-        if normalize_vietnamese_plate(reading.raw_text) == winner
-    ]
-    mean_confidence = sum(winner_readings) / len(winner_readings)
+
+    length_weight: dict[int, float] = defaultdict(float)
+    for _, key, weight in scored:
+        length_weight[len(key)] += weight
+    target_length = max(length_weight, key=lambda length: length_weight[length])
+    pool = [item for item in scored if len(item[1]) == target_length]
+
+    position_votes: list[dict[str, float]] = [defaultdict(float) for _ in range(target_length)]
+    for reading, key, weight in pool:
+        aligned = len(reading.character_confidences) == target_length
+        for index, character in enumerate(key):
+            char_weight = weight * (reading.character_confidences[index] if aligned else 1.0)
+            position_votes[index][character] += char_weight
+
+    winner_chars: list[str] = []
+    agreements: list[float] = []
+    for votes in position_votes:
+        character, weight = max(votes.items(), key=lambda item: item[1])
+        winner_chars.append(character)
+        total = sum(votes.values())
+        agreements.append(weight / total if total else 0.0)
+    winner = coerce_to_plate_grammar("".join(winner_chars))
+    if not is_plausible_vietnamese_plate(winner):
+        return None
+
+    exact = [item for item in pool if item[1] == winner]
+    source = exact or pool
+    raw = max(source, key=lambda item: item[2])[0].raw_text
+    mean_confidence = sum(item[0].confidence for item in source) / len(source)
+    agreement = sum(agreements) / len(agreements)
     confidence = min(1.0, 0.65 * mean_confidence + 0.35 * agreement)
-    return winner, raw_by_normalized[winner][0], confidence
+    return winner, raw, confidence
 
 
 def _reading_reliability(reading: PlateReading) -> float:
@@ -180,8 +256,7 @@ def finalize_vehicle_track(
     else:
         normalized, raw, confidence = vote
         winner_reading_count = sum(
-            normalize_vietnamese_plate(reading.raw_text) == normalized
-            for reading, _ in readings
+            plate_key(reading.raw_text) == normalized for reading, _ in readings
         )
         classification = (
             EventClassification.RECOGNIZED
@@ -195,10 +270,13 @@ def finalize_vehicle_track(
             item
             for item in plate_observations
             if item.reading is not None
-            and normalize_vietnamese_plate(item.reading.raw_text) == normalized
+            and plate_key(item.reading.raw_text) == normalized
         ]
+        # A per-character winner may be a synthesis of glyphs that no single frame read
+        # verbatim; fall back to the readable frames so best-crop selection never empties.
         best = max(
-            matching_winner_observations,
+            matching_winner_observations
+            or [item for item in plate_observations if item.reading is not None],
             key=lambda item: (
                 item.quality_score * _reading_reliability(item.reading),
                 min(item.reading.character_confidences)
@@ -431,12 +509,30 @@ def consolidate_vehicle_events(
             and event.plate_detection_count == 1
             and overlaps_readable_event
         )
+        # A single garbled OCR frame during another vehicle's pass becomes its own
+        # 1-frame track with a wildly different plate string (89C111522 misread as
+        # 01E111573). Edit-distance dedup can't bridge that, but a lone plated frame
+        # whose whole span sits inside a longer, higher-confidence plated event with a
+        # different reading is the same bike — it cannot be in two places at once.
+        contained_plate_fragment = (
+            event.plate_detection_count <= 1
+            and any(
+                other is not event
+                and other.plate_detection_count > event.plate_detection_count
+                and other.normalized_plate != event.normalized_plate
+                and other.start_timestamp_ms <= event.start_timestamp_ms
+                and event.end_timestamp_ms <= other.end_timestamp_ms
+                and (other.confidence or 0) >= (event.confidence or 0)
+                for other in plated
+            )
+        )
         if (
             event.plate_detection_count == 0
             and overlaps_plated_event
             or motion_only
             or weak_unreadable_plate
             or split_unreadable_fragment
+            or contained_plate_fragment
         ):
             continue
         consolidated.append(event)

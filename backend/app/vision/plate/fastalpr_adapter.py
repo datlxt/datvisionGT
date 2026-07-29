@@ -39,7 +39,14 @@ class FastAlprPlateEngine:
         import onnxruntime as ort
         from fast_alpr.default_detector import DefaultDetector
         from fast_alpr.default_ocr import DefaultOCR
-        from open_image_models.detection.core.yolo_v9.inference import YoloV9ObjectDetector
+        try:  # open_image_models renamed the detector class in 0.6.0.
+            from open_image_models.detection.core.yolo_v9.inference import (
+                YoloV9Detector as YoloV9ObjectDetector,
+            )
+        except ImportError:  # Older releases still ship the previous name.
+            from open_image_models.detection.core.yolo_v9.inference import (
+                YoloV9ObjectDetector,
+            )
 
         options = ort.SessionOptions()
         options.intra_op_num_threads = max(1, intra_op_threads)
