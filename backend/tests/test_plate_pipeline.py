@@ -11,7 +11,7 @@ from app.vision.plate.domain import (
     normalize_vietnamese_plate,
     plate_key,
 )
-from app.vision.plate.fastalpr_adapter import plate_quality_score
+from app.vision.plate.fastalpr_adapter import enhance_for_ocr, plate_quality_score
 from app.vision.plate.interfaces import PlateDetection, PlateReading, VehicleDetection
 from app.vision.plate.pipeline import MotorcyclePlatePipeline, PipelineFrame
 
@@ -152,6 +152,22 @@ def test_per_character_vote_reconstructs_plate_no_single_frame_read() -> None:
     result = finalize_vehicle_track(track)
     assert result.normalized_plate == "29X201482"
     assert result.classification == EventClassification.RECOGNIZED
+
+
+def test_enhance_for_ocr_upscales_without_mutating_input() -> None:
+    crop = np.full((40, 60, 3), 120, dtype=np.uint8)
+    original = crop.copy()
+    enhanced = enhance_for_ocr(crop)
+    # 2x upscale for the OCR model, and the source crop (stored as evidence) is untouched.
+    assert enhanced.shape[:2] == (80, 120)
+    assert np.array_equal(crop, original)
+
+
+def test_enhance_for_ocr_is_safe_on_degenerate_crops() -> None:
+    empty = np.zeros((0, 0, 3), dtype=np.uint8)
+    grayscale = np.full((10, 10), 128, dtype=np.uint8)
+    assert enhance_for_ocr(empty) is empty
+    assert enhance_for_ocr(grayscale) is grayscale
 
 
 def test_single_ocr_reading_remains_low_confidence() -> None:
@@ -490,6 +506,35 @@ def test_plate_quality_rejects_fully_clipped_glare() -> None:
     readable = np.zeros((80, 140, 3), dtype=np.uint8)
     readable[:, ::8] = 220
     assert plate_quality_score(readable) > plate_quality_score(glared)
+
+
+def test_plate_quality_prefers_focus_over_motion_blur() -> None:
+    import cv2
+
+    sharp = np.zeros((80, 140, 3), dtype=np.uint8)
+    sharp[:, ::6] = 210  # crisp vertical strokes like plate characters
+    blurred = cv2.GaussianBlur(sharp, (0, 0), 2.5)
+    assert plate_quality_score(sharp) > plate_quality_score(blurred)
+
+
+def test_plate_quality_prefers_the_larger_closer_plate() -> None:
+    import cv2
+
+    large = np.zeros((90, 150, 3), dtype=np.uint8)
+    large[:, ::6] = 210
+    small = cv2.resize(large, None, fx=0.4, fy=0.4, interpolation=cv2.INTER_AREA)
+    assert plate_quality_score(large) > plate_quality_score(small)
+
+
+def test_plate_quality_does_not_reward_specular_glare() -> None:
+    import cv2
+
+    readable = np.zeros((90, 150, 3), dtype=np.uint8)
+    readable[:, ::6] = 210
+    glary = readable.copy()
+    cv2.ellipse(glary, (75, 45), (45, 26), 0, 0, 360, (255, 255, 255), -1)
+    # The old gradient score ranked a glary blob highest; clipped focus must not.
+    assert plate_quality_score(readable) > plate_quality_score(glary)
 
 
 def test_same_plate_is_one_record_across_the_whole_video() -> None:

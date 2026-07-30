@@ -88,7 +88,7 @@ class FastAlprPlateEngine:
             for result in detections
         ]
 
-    def recognize(self, crop: NDArray[np.uint8]) -> PlateReading | None:
+    def _read(self, crop: NDArray[np.uint8]) -> PlateReading | None:
         result = self._ocr.predict(crop)
         if result is None or not result.text:
             return None
@@ -108,6 +108,41 @@ class FastAlprPlateEngine:
             character_confidences=character_confidences,
         )
 
+    def recognize(self, crop: NDArray[np.uint8]) -> PlateReading | None:
+        # OCR the raw crop and a contrast-boosted copy, then keep whichever read the model
+        # is more confident in. A grimy / under-lit plate loses the fine strokes that tell
+        # look-alike digits apart (2 vs 7, 3 vs 9); CLAHE recovers them. Gating on confidence
+        # means enhancement can only rescue a dirty read, never corrupt a clean one.
+        raw_reading = self._read(crop)
+        enhanced_reading = self._read(enhance_for_ocr(crop))
+        if enhanced_reading is not None and (
+            raw_reading is None or enhanced_reading.confidence > raw_reading.confidence
+        ):
+            return enhanced_reading
+        return raw_reading
+
+
+def enhance_for_ocr(crop: NDArray[np.uint8]) -> NDArray[np.uint8]:
+    """Boost local contrast on a dirty/low-contrast plate crop, for OCR input only.
+
+    Small camera plates lose the fine strokes that separate look-alike digits (2 vs 7,
+    3 vs 9) when the plate is grimy or under-lit. Upscaling then CLAHE (contrast-limited
+    adaptive histogram equalisation) restores that local contrast and a light unsharp pass
+    crisps the edges. Applied to the OCR input only — the stored evidence crop keeps the
+    untouched pixels a reviewer needs to trust. Never mutates the input array.
+    """
+
+    import cv2
+
+    if crop.size == 0 or crop.ndim != 3:
+        return crop
+    upscaled = cv2.resize(crop, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+    lightness, a_channel, b_channel = cv2.split(cv2.cvtColor(upscaled, cv2.COLOR_BGR2LAB))
+    lightness = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(lightness)
+    balanced = cv2.cvtColor(cv2.merge((lightness, a_channel, b_channel)), cv2.COLOR_LAB2BGR)
+    blurred = cv2.GaussianBlur(balanced, (0, 0), 3)
+    return cv2.addWeighted(balanced, 1.5, blurred, -0.5, 0)
+
 
 def crop_bgr(frame: NDArray[np.uint8], bbox: tuple[int, int, int, int]) -> NDArray[np.uint8]:
     height, width = frame.shape[:2]
@@ -119,44 +154,41 @@ def crop_bgr(frame: NDArray[np.uint8], bbox: tuple[int, int, int, int]) -> NDArr
     return frame[y1:y2, x1:x2]
 
 
-def sharpness_score(image: NDArray[np.uint8]) -> float:
-    """Cheap normalized gradient score used for selecting a track's best frame."""
-
-    if image.size == 0:
-        return 0.0
-    grayscale = (
-        image.astype(np.float32).mean(axis=2) if image.ndim == 3 else image.astype(np.float32)
-    )
-    horizontal = np.abs(np.diff(grayscale, axis=1)).mean() if grayscale.shape[1] > 1 else 0.0
-    vertical = np.abs(np.diff(grayscale, axis=0)).mean() if grayscale.shape[0] > 1 else 0.0
-    return float(min(1.0, (horizontal + vertical) / 64.0))
-
-
 def plate_quality_score(image: NDArray[np.uint8]) -> float:
-    """Rank plate crops by detail, contrast and usable exposure.
+    """Rank plate crops so best-frame selection picks the most READABLE plate.
 
-    Sharp saturated glare can score well on gradients alone. Combining sharpness
-    with contrast, exposure balance and clipping makes the selected evidence frame
-    much more likely to contain every readable character.
+    Focus (variance of the Laplacian) is the dominant term — it collapses under motion
+    blur, the usual reason a plate that looks fine to the eye crops out smeared. Plate
+    resolution rewards the closer, larger pass; contrast and exposure keep mid-tones
+    usable. Glare is handled twice: bright pixels are clipped before measuring focus and
+    contrast so a specular blob cannot fake sharp edges (the old gradient score ranked a
+    glary frame highest), and a saturation penalty pushes blown-out frames down. Returns
+    a bounded [0, 1] score.
     """
 
+    import cv2
+
     if image.size == 0:
         return 0.0
-    grayscale = (
-        image.astype(np.float32).mean(axis=2) if image.ndim == 3 else image.astype(np.float32)
+    gray = (cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image).astype(
+        np.uint8
     )
-    sharpness = sharpness_score(image)
-    contrast = float(min(1.0, grayscale.std() / 64.0))
-    mean_luma = float(grayscale.mean())
+    # Flatten glare blobs to a plateau so their hard edges cannot inflate focus/contrast.
+    unglared = np.minimum(gray, 240)
+    focus = min(1.0, cv2.Laplacian(unglared, cv2.CV_64F).var() / 500.0)
+    contrast = float(min(1.0, unglared.astype(np.float32).std() / 64.0))
+    resolution = float(min(1.0, (gray.shape[0] * gray.shape[1]) ** 0.5 / 130.0))
+    mean_luma = float(gray.astype(np.float32).mean())
     exposure_balance = max(0.0, 1.0 - abs(mean_luma - 135.0) / 135.0)
-    clipped_ratio = float(np.mean((grayscale <= 3.0) | (grayscale >= 252.0)))
-    clipping = max(0.0, 1.0 - 2.0 * clipped_ratio)
+    saturated_ratio = float(np.mean(gray >= 250))
+    glare = max(0.0, 1.0 - 6.0 * saturated_ratio)
     return float(
         min(
             1.0,
-            0.50 * sharpness
-            + 0.25 * contrast
-            + 0.15 * exposure_balance
-            + 0.10 * clipping,
+            0.48 * focus
+            + 0.18 * resolution
+            + 0.12 * contrast
+            + 0.07 * exposure_balance
+            + 0.15 * glare,
         )
     )

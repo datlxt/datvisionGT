@@ -14,3 +14,5 @@ python-multipart>=0.0.20,<0.1
 fast-alpr[onnx]>=0.4,<0.5
 # Transitive via fast-alpr; pin it because 0.6.0 renamed YoloV9ObjectDetector -> YoloV9Detector.
 open_image_models>=0.6,<0.7
+# Transitive via fast-alpr, but imported directly for OCR crop enhancement (CLAHE).
+opencv-python-headless>=5,<6
