@@ -226,8 +226,11 @@ def finalize_vehicle_track(
     flags: list[str] = []
 
     if not plate_observations:
+        # A semantic detection is any real vehicle label (motorcycle, car); motion-only
+        # fallbacks carry a "*_motion_candidate" label and must not count as proof.
         semantic_vehicle_observations = sum(
-            item.vehicle_label == "motorcycle" for item in track.observations
+            not item.vehicle_label.endswith("_motion_candidate")
+            for item in track.observations
         )
         if semantic_vehicle_observations == 0:
             # Pure motion (MOG2) with no semantic vehicle detection is a review candidate
@@ -493,10 +496,12 @@ def consolidate_vehicle_events(
             and event.end_timestamp_ms >= plate_event.start_timestamp_ms
             for plate_event in plated
         )
-        overlaps_readable_event = any(
+        # Overlapping OR within ~1.5s of a readable event: a lone unreadable plate frame
+        # that close is the same bike's blurry entry/exit, not a distinct vehicle.
+        near_readable_event = any(
             event is not readable_event
-            and event.start_timestamp_ms <= readable_event.end_timestamp_ms
-            and event.end_timestamp_ms >= readable_event.start_timestamp_ms
+            and event.start_timestamp_ms - readable_event.end_timestamp_ms <= 1_500
+            and readable_event.start_timestamp_ms - event.end_timestamp_ms <= 1_500
             for readable_event in readable
         )
         weak_unreadable_plate = (
@@ -506,8 +511,9 @@ def consolidate_vehicle_events(
         )
         split_unreadable_fragment = (
             event.classification == EventClassification.UNREADABLE
-            and event.plate_detection_count == 1
-            and overlaps_readable_event
+            and event.plate_detection_count <= 3
+            and event.end_timestamp_ms - event.start_timestamp_ms <= 1_500
+            and near_readable_event
         )
         # A single garbled OCR frame during another vehicle's pass becomes its own
         # 1-frame track with a wildly different plate string (89C111522 misread as
@@ -526,6 +532,22 @@ def consolidate_vehicle_events(
                 for other in plated
             )
         )
+        # The plate detector fires on the parking card the rider presents at the barrier.
+        # Unlike a rear plate (low on the bumper, roughly square), the card sits high in the
+        # frame (rider's hand) or has a non-plate aspect. Only unreadable ones are judged so
+        # a genuinely dirty real plate (low + plate-shaped) is never dropped.
+        card_false_positive = False
+        plate_bbox = event.best_observation.plate_bbox
+        if event.classification == EventClassification.UNREADABLE and plate_bbox is not None:
+            _, vy1, _, vy2 = event.best_observation.vehicle_bbox
+            plate_height = plate_bbox[3] - plate_bbox[1]
+            vehicle_height = vy2 - vy1
+            if plate_height > 0 and vehicle_height > 0:
+                vertical_position = ((plate_bbox[1] + plate_bbox[3]) / 2 - vy1) / vehicle_height
+                aspect = (plate_bbox[2] - plate_bbox[0]) / plate_height
+                card_false_positive = (
+                    vertical_position < 0.50 or aspect < 1.0 or aspect > 2.5
+                )
         if (
             event.plate_detection_count == 0
             and overlaps_plated_event
@@ -533,6 +555,7 @@ def consolidate_vehicle_events(
             or weak_unreadable_plate
             or split_unreadable_fragment
             or contained_plate_fragment
+            or card_false_positive
         ):
             continue
         consolidated.append(event)

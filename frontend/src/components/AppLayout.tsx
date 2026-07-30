@@ -10,6 +10,7 @@ const viewLabels: Record<View, string> = {
   processing: "Đang xử lý",
   review: "Kiểm duyệt GT",
   exports: "Kết quả & Export",
+  condense: "Cắt video",
 };
 
 function Brand() {
@@ -33,12 +34,13 @@ function Brand() {
 type NavItem = {
   view: Exclude<View, "processing">;
   label: string;
-  icon: "grid" | "plus" | "shield" | "download";
+  icon: "grid" | "plus" | "shield" | "download" | "scissors";
 };
 
 const navigation: NavItem[] = [
   { view: "overview", label: "Tổng quan", icon: "grid" },
   { view: "create", label: "Tạo job", icon: "plus" },
+  { view: "condense", label: "Cắt video", icon: "scissors" },
   { view: "review", label: "Kiểm duyệt GT", icon: "shield" },
   { view: "exports", label: "Kết quả & Export", icon: "download" },
 ];

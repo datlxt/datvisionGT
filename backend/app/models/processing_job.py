@@ -123,3 +123,9 @@ class ProcessingJob(UUIDPrimaryKeyMixin, Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+    @property
+    def vehicle_type(self) -> str:
+        """Selectable vehicle class stored in the config snapshot (default motorcycle)."""
+
+        return (self.config_snapshot or {}).get("vehicle_type", "motorcycle")

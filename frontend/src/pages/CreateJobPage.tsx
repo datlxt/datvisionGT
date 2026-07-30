@@ -60,6 +60,7 @@ export function CreateJobPage({
   const [draft, setDraft] = useState<Job | null>(null);
   const [busyAction, setBusyAction] = useState<"draft" | "start" | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [vehicleType, setVehicleType] = useState<"motorcycle" | "car">("motorcycle");
   const [message, setMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
 
   useEffect(
@@ -96,7 +97,7 @@ export function CreateJobPage({
 
   async function createDraft() {
     if (!file) throw new Error("Vui lòng chọn video trước.");
-    const created = await api<Job>("/api/v1/jobs", {
+    const created = await api<Job>(`/api/v1/jobs?vehicle_type=${vehicleType}`, {
       method: "POST",
       body: file,
       headers: {
@@ -266,10 +267,10 @@ export function CreateJobPage({
             <div className="selection-grid scope-grid" role="listbox">
               <SelectionCard
                 badge="Đang sử dụng"
-                description="Phát hiện xe máy, biển số và OCR nhiều frame."
+                description="Phát hiện xe, biển số và OCR nhiều frame."
                 icon={<Icon name="plate" size={24} />}
                 selected
-                title="Biển số xe máy"
+                title="Biển số"
               />
               <SelectionCard
                 badge="Chưa triển khai"
@@ -285,6 +286,40 @@ export function CreateJobPage({
                 icon={<Icon name="layers" size={24} />}
                 title="Khuôn mặt và biển số"
               />
+            </div>
+
+            <div className="vehicle-type-block">
+              <h3>Loại phương tiện</h3>
+              <div className="selection-grid vehicle-type-grid" role="listbox">
+                <button
+                  aria-selected={vehicleType === "motorcycle"}
+                  className={`selection-card ${vehicleType === "motorcycle" ? "selected" : ""}`}
+                  onClick={() => setVehicleType("motorcycle")}
+                  role="option"
+                  type="button"
+                >
+                  <div className="selection-card-top">
+                    <Icon name="plate" size={24} />
+                    <span>Mặc định</span>
+                  </div>
+                  <strong>Xe máy</strong>
+                  <p>Biển 2 dòng, camera sau trạm/bãi.</p>
+                </button>
+                <button
+                  aria-selected={vehicleType === "car"}
+                  className={`selection-card ${vehicleType === "car" ? "selected" : ""}`}
+                  onClick={() => setVehicleType("car")}
+                  role="option"
+                  type="button"
+                >
+                  <div className="selection-card-top">
+                    <Icon name="scan" size={24} />
+                    <span>Mới</span>
+                  </div>
+                  <strong>Ô tô con</strong>
+                  <p>Biển 1 dòng. Cùng model, đổi lớp nhận diện xe.</p>
+                </button>
+              </div>
             </div>
 
             <div className="readonly-fields">
@@ -417,7 +452,7 @@ export function CreateJobPage({
               <dt>
                 <Icon name="plate" size={18} /> Loại xử lý
               </dt>
-              <dd>Biển số xe máy</dd>
+              <dd>Biển số · {vehicleType === "car" ? "Ô tô con" : "Xe máy"}</dd>
             </div>
             <div>
               <dt>

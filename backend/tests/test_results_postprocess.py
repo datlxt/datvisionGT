@@ -146,6 +146,57 @@ def test_single_frame_misread_inside_a_pass_is_dropped() -> None:
     assert results[0].end_timestamp_ms == 27_280
 
 
+def test_unreadable_fragment_next_to_a_readable_pass_is_dropped() -> None:
+    # The blurry entry frame of a bike (unreadable, 1 plate detection) sits 0.24s before
+    # the frame where the same plate is read; the good read represents it, so it collapses.
+    readable = event("VEHICLE_2", start_ms=284_760, end_ms=290_000, plate="29F164222")
+    unreadable = event("VEHICLE_1", start_ms=283_520, end_ms=284_520).model_copy(
+        update={"classification": "UNREADABLE", "plate_detection_count": 2}
+    )
+    results = _merge_persisted_motion_candidates([unreadable, readable])
+    assert len(results) == 1
+    assert results[0].normalized_plate == "29F164222"
+
+
+def test_isolated_unreadable_pass_is_kept_for_review() -> None:
+    # Guard: an unreadable plate with no readable neighbour must stay a visible case.
+    unreadable = event("VEHICLE_1", start_ms=10_000, end_ms=11_000).model_copy(
+        update={"classification": "UNREADABLE", "plate_detection_count": 1}
+    )
+    results = _merge_persisted_motion_candidates([unreadable])
+    assert len(results) == 1
+    assert results[0].classification == "UNREADABLE"
+
+
+def test_card_false_positive_high_on_vehicle_is_dropped() -> None:
+    # A parking card in the rider's hand: unreadable, high on the vehicle, portrait-ish.
+    card = event(
+        "VEHICLE_1", start_ms=10_000, end_ms=12_000, bbox=(400, 100, 540, 500)
+    ).model_copy(
+        update={
+            "classification": "UNREADABLE",
+            "plate_detection_count": 6,
+            "plate_bbox": (450, 120, 510, 200),
+        }
+    )
+    assert _merge_persisted_motion_candidates([card]) == []
+
+
+def test_dirty_but_real_unreadable_plate_is_kept() -> None:
+    # Low on the bumper and plate-shaped: a genuinely unreadable real plate stays for review.
+    plate = event(
+        "VEHICLE_1", start_ms=10_000, end_ms=12_000, bbox=(400, 100, 540, 500)
+    ).model_copy(
+        update={
+            "classification": "UNREADABLE",
+            "plate_detection_count": 6,
+            "plate_bbox": (430, 400, 520, 470),
+        }
+    )
+    [kept] = _merge_persisted_motion_candidates([plate])
+    assert kept.classification == "UNREADABLE"
+
+
 def test_two_short_distinct_bikes_are_not_merged_as_fragments() -> None:
     # Guard: two genuinely different plated passes that do not temporally contain each
     # other must both survive — containment (not mere adjacency) marks a phantom.

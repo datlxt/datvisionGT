@@ -30,7 +30,11 @@ def _nms(boxes: NDArray[np.float32], scores: NDArray[np.float32], threshold: flo
 
 
 class YoloXMotorcycleDetector:
-    """Apache-2.0 YOLOX-tiny ONNX adapter for motorcycle event detection."""
+    """Apache-2.0 YOLOX-tiny ONNX adapter for vehicle event detection.
+
+    Defaults to the COCO motorcycle class so existing jobs are unchanged; pass other
+    class ids (e.g. car=2) with a matching label to run the same model for a car lane.
+    """
 
     model_name = "yolox-tiny"
     motorcycle_class_id = 3  # COCO
@@ -39,6 +43,8 @@ class YoloXMotorcycleDetector:
         self,
         model_path: Path,
         *,
+        vehicle_class_ids: tuple[int, ...] = (3,),  # COCO motorcycle
+        label: str = "motorcycle",
         confidence_threshold: float = 0.35,
         nms_threshold: float = 0.45,
         providers: tuple[str, ...] = ("CPUExecutionProvider",),
@@ -62,6 +68,8 @@ class YoloXMotorcycleDetector:
         )
         self._confidence_threshold = confidence_threshold
         self._nms_threshold = nms_threshold
+        self._class_ids = list(vehicle_class_ids)
+        self._label = label
 
     def detect(self, frame: NDArray[np.uint8]) -> list[VehicleDetection]:
         tensor, ratio = self._preprocess(frame)
@@ -76,7 +84,7 @@ class YoloXMotorcycleDetector:
 
         objectness = predictions[:, 4]
         class_scores = predictions[:, 5:]
-        scores = objectness * class_scores[:, self.motorcycle_class_id]
+        scores = objectness * class_scores[:, self._class_ids].max(axis=1)
         selected = scores >= self._confidence_threshold
         boxes = boxes[selected].astype(np.float32)
         scores = scores[selected].astype(np.float32)
@@ -92,7 +100,11 @@ class YoloXMotorcycleDetector:
                 max(1, min(height, round(float(y2)))),
             )
             if bbox[2] > bbox[0] and bbox[3] > bbox[1]:
-                results.append(VehicleDetection(bbox=bbox, confidence=float(scores[index])))
+                results.append(
+                    VehicleDetection(
+                        bbox=bbox, confidence=float(scores[index]), label=self._label
+                    )
+                )
         return results
 
     def _preprocess(self, image: NDArray[np.uint8]) -> tuple[NDArray[np.float32], float]:

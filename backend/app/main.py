@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.condense import router as condense_router
 from app.api.evidence import router as evidence_router
 from app.api.ground_truth import router as ground_truth_router
 from app.api.health import router as health_router
@@ -37,6 +38,7 @@ app.include_router(evidence_router, prefix="/api/v1")
 app.include_router(jobs_router, prefix="/api/v1")
 app.include_router(results_router, prefix="/api/v1")
 app.include_router(ground_truth_router, prefix="/api/v1")
+app.include_router(condense_router, prefix="/api/v1")
 
 
 @app.get("/", include_in_schema=False)

@@ -4,6 +4,7 @@ import { AppLayout } from "./components/AppLayout";
 import { ErrorState, LoadingState } from "./components/ui";
 import { api } from "./lib/api";
 import { isReadyForReview } from "./lib/format";
+import { CondensePage } from "./pages/CondensePage";
 import { CreateJobPage } from "./pages/CreateJobPage";
 import { ExportsPage } from "./pages/ExportsPage";
 import { OverviewPage } from "./pages/OverviewPage";
@@ -121,6 +122,20 @@ export default function App() {
     content = <ReviewPage job={selectedJob} key={selectedJob.id} />;
   } else if (view === "exports") {
     content = <ExportsPage jobs={jobs} onDelete={deleteJob} onOpen={openJob} />;
+  } else if (view === "condense") {
+    content = (
+      <CondensePage
+        onSentToJob={async (jobId) => {
+          try {
+            const job = await api<Job>(`/api/v1/jobs/${jobId}`);
+            upsertJob(job);
+            setView("processing");
+          } catch {
+            navigate("overview");
+          }
+        }}
+      />
+    );
   } else {
     content = (
       <section className="page">

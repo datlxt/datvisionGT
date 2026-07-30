@@ -52,6 +52,17 @@ def test_no_plate_requires_repeated_vehicle_evidence() -> None:
     assert result.vehicle_detection_count == 5
 
 
+def test_car_without_plate_is_a_real_event_not_a_motion_candidate() -> None:
+    # A car lane uses COCO class "car"; the semantic check must accept it, so a plateless
+    # car is a NO_PLATE event rather than being demoted to a motion-only review candidate.
+    track = VehicleTrack(
+        "VEHICLE_000001", [observation(index, vehicle_label="car") for index in range(5)]
+    )
+    result = finalize_vehicle_track(track)
+    assert result.classification == EventClassification.NO_PLATE
+    assert "MOTION_ONLY_NO_PLATE_CANDIDATE" not in result.quality_flags
+
+
 def test_single_vehicle_frame_is_a_low_evidence_no_plate_case() -> None:
     # A real (semantic) vehicle without a plate is still an event, even from one frame.
     result = finalize_vehicle_track(VehicleTrack("VEHICLE_000001", [observation(1)]))

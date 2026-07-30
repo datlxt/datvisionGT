@@ -29,6 +29,12 @@ from app.vision.plate.pipeline import MotorcyclePlatePipeline, PipelineFrame, Re
 from app.vision.plate.yolox_vehicle import YoloXMotorcycleDetector
 from app.workers.evidence import EvidenceCancelled, process_evidence_job
 
+# COCO class ids + evidence label per selectable vehicle type. Same YOLOX-tiny model.
+_VEHICLE_COCO_CLASSES: dict[str, tuple[tuple[int, ...], str]] = {
+    "motorcycle": ((3,), "motorcycle"),
+    "car": ((2,), "car"),
+}
+
 
 def _model_path(root: Path, relative: str) -> Path:
     path = (root / relative).resolve()
@@ -167,8 +173,15 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
                     session.add(JobModel(job_id=job.id, model_version_id=model.id, role=role))
             session.commit()
 
+            vehicle_type = (job.config_snapshot or {}).get("vehicle_type", "motorcycle")
+            class_ids, vehicle_label = _VEHICLE_COCO_CLASSES.get(
+                vehicle_type, _VEHICLE_COCO_CLASSES["motorcycle"]
+            )
             semantic_vehicle_detector = YoloXMotorcycleDetector(
-                vehicle_path, intra_op_threads=settings.model_intra_op_threads
+                vehicle_path,
+                vehicle_class_ids=class_ids,
+                label=vehicle_label,
+                intra_op_threads=settings.model_intra_op_threads,
             )
             vehicle_detector = CompositeVehicleDetector(
                 [semantic_vehicle_detector, FixedCameraMotionDetector()]

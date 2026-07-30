@@ -64,7 +64,6 @@ export function ProcessingPage({
           <StatusBadge tone={statusTone(job.status)}>{statusLabel(job.status)}</StatusBadge>
         }
         description={job.job_code}
-        eyebrow="Đang xử lý"
         title={job.source_name}
       />
 

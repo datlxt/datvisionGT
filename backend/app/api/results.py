@@ -124,6 +124,28 @@ def _persisted_plate_variants_match(previous: EventResult, event: EventResult) -
     )
 
 
+def _looks_like_non_plate(event: EventResult) -> bool:
+    """A card/tag the rider presents at the barrier, misdetected as a plate.
+
+    Unlike a rear plate (low on the bumper, roughly square), the card sits high in the
+    frame (the rider's hand) or has a non-plate aspect ratio. Only unreadable detections
+    are judged — a real plate that OCR parsed to grammar is trusted regardless of position,
+    and a genuinely dirty but real plate stays because it is low and plate-shaped.
+    """
+
+    if event.classification != "UNREADABLE" or event.plate_bbox is None:
+        return False
+    px1, py1, px2, py2 = event.plate_bbox
+    _, vy1, _, vy2 = event.vehicle_bbox
+    plate_height = py2 - py1
+    vehicle_height = vy2 - vy1
+    if plate_height <= 0 or vehicle_height <= 0:
+        return False
+    vertical_position = ((py1 + py2) / 2 - vy1) / vehicle_height
+    aspect = (px2 - px1) / plate_height
+    return vertical_position < 0.50 or aspect < 1.0 or aspect > 2.5
+
+
 def _merge_persisted_motion_candidates(
     events: list[EventResult],
     *,
@@ -326,6 +348,28 @@ def _merge_persisted_motion_candidates(
             )
         )
     ]
+
+    # A lone plate frame the OCR could not read, sitting right before/after a readable
+    # plate event (within ~1.5s), is the same bike's blurry entry/exit — the good read
+    # already represents it. Drop the phantom "unreadable" case (rule: 1 bike = 1 case).
+    readable_events = [event for event in variant_merged if event.normalized_plate]
+    variant_merged = [
+        event
+        for event in variant_merged
+        if not (
+            event.classification == "UNREADABLE"
+            and event.plate_detection_count <= 3
+            and event.end_timestamp_ms - event.start_timestamp_ms <= 1500
+            and any(
+                event.start_timestamp_ms - readable.end_timestamp_ms <= 1500
+                and readable.start_timestamp_ms - event.end_timestamp_ms <= 1500
+                for readable in readable_events
+            )
+        )
+    ]
+
+    # Drop card/tag false positives (unreadable, geometrically not a rear plate).
+    variant_merged = [event for event in variant_merged if not _looks_like_non_plate(event)]
 
     unique_events: list[EventResult] = []
     plate_index: dict[str, int] = {}

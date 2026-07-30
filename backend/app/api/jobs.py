@@ -28,6 +28,7 @@ from app.workers.callbacks import mark_job_failed
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".m4v"}
+VEHICLE_TYPES = {"motorcycle", "car"}
 
 
 class JobResponse(BaseModel):
@@ -49,6 +50,7 @@ class JobResponse(BaseModel):
     fps: float | None
     processing_mode: str
     sample_rate: float
+    vehicle_type: str
     error_code: str | None
     error_message: str | None
     created_at: datetime
@@ -79,12 +81,15 @@ async def create_job(
     request: Request,
     filename_header: Annotated[str, Header(alias="X-Filename")],
     session: Annotated[Session, Depends(get_db)],
+    vehicle_type: str = "motorcycle",
 ) -> ProcessingJob:
     settings = get_settings()
     filename = _safe_filename(unquote(filename_header))
     extension = Path(filename).suffix.lower()
     if extension not in VIDEO_EXTENSIONS:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Unsupported video format")
+    if vehicle_type not in VEHICLE_TYPES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Unsupported vehicle type")
 
     upload_id = uuid.uuid4()
     upload_dir = settings.storage_root / "uploads" / str(upload_id)
@@ -142,6 +147,7 @@ async def create_job(
         config_snapshot={
             "camera": "rear_toll_lane",
             "mode": "STANDARD",
+            "vehicle_type": vehicle_type,
             "vehicle_detector": "yolox-tiny",
             "plate_detector": "yolo-v9-t-512-license-plate-end2end",
             "ocr": "cct-xs-v2-global-model",

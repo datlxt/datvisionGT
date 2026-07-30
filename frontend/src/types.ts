@@ -1,4 +1,17 @@
-export type View = "overview" | "create" | "processing" | "review" | "exports";
+export type View = "overview" | "create" | "processing" | "review" | "exports" | "condense";
+
+export type CondenseStatus = {
+  id: string;
+  status: "queued" | "scanning" | "rendering" | "completed" | "empty" | "failed" | string;
+  progress: number;
+  source_name: string | null;
+  min_gap_seconds: number | null;
+  source_duration_ms: number | null;
+  condensed_duration_ms: number | null;
+  cut_ms: number | null;
+  segment_count: number | null;
+  segments: [number, number][] | null;
+};
 
 export type JobStatus =
   | "DRAFT"
@@ -27,6 +40,7 @@ export type Job = {
   fps: number | null;
   processing_mode: "HIGH_RECALL" | "BALANCED" | "FAST";
   sample_rate: number;
+  vehicle_type: "motorcycle" | "car";
   error_code: string | null;
   error_message: string | null;
   created_at: string;
