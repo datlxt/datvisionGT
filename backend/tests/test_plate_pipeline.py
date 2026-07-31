@@ -548,6 +548,18 @@ def test_plate_quality_does_not_reward_specular_glare() -> None:
     assert plate_quality_score(readable) > plate_quality_score(glary)
 
 
+def test_plate_quality_penalizes_coloured_glare() -> None:
+    import cv2
+
+    # Orange tail-light glare stays mid-toned in grayscale but blows out the red channel;
+    # the max-channel saturation term must still catch it and score it below a clean crop.
+    readable = np.zeros((90, 150, 3), dtype=np.uint8)
+    readable[:, ::6] = 210
+    glary = readable.copy()
+    cv2.ellipse(glary, (75, 45), (45, 26), 0, 0, 360, (0, 120, 255), -1)  # BGR orange
+    assert plate_quality_score(readable) > plate_quality_score(glary)
+
+
 def test_same_plate_is_one_record_across_the_whole_video() -> None:
     early = finalize_vehicle_track(
         VehicleTrack(

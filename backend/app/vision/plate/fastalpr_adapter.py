@@ -173,15 +173,21 @@ def plate_quality_score(image: NDArray[np.uint8]) -> float:
     gray = (cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image).astype(
         np.uint8
     )
-    # Flatten glare blobs to a plateau so their hard edges cannot inflate focus/contrast.
-    unglared = np.minimum(gray, 240)
+    # Brightest channel per pixel catches COLOURED glare (orange tail-light / sodium lamp
+    # reflections) that a grayscale blows through — grayscale of orange stays mid-toned.
+    brightest = image.max(axis=2) if image.ndim == 3 else gray
+    # Flatten glare blobs (white or coloured) so their hard edges cannot fake focus/contrast.
+    unglared = gray.copy()
+    unglared[brightest >= 240] = 240
     focus = min(1.0, cv2.Laplacian(unglared, cv2.CV_64F).var() / 500.0)
     contrast = float(min(1.0, unglared.astype(np.float32).std() / 64.0))
     resolution = float(min(1.0, (gray.shape[0] * gray.shape[1]) ** 0.5 / 130.0))
     mean_luma = float(gray.astype(np.float32).mean())
     exposure_balance = max(0.0, 1.0 - abs(mean_luma - 135.0) / 135.0)
-    saturated_ratio = float(np.mean(gray >= 250))
-    glare = max(0.0, 1.0 - 6.0 * saturated_ratio)
+    # Blown-out fraction in ANY channel — a white plate background (~200-230) stays under
+    # 245, but specular glare (white or coloured) crosses it and is penalised.
+    saturated_ratio = float(np.mean(brightest >= 245))
+    glare = max(0.0, 1.0 - 5.0 * saturated_ratio)
     return float(
         min(
             1.0,
