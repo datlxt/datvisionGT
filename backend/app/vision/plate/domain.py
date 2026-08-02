@@ -212,6 +212,7 @@ def finalize_vehicle_track(
     min_no_plate_observations: int = 5,
     min_recognized_readings: int = 2,
     recognized_threshold: float = 0.75,
+    weak_character_threshold: float = 0.60,
 ) -> VehicleEventResult:
     if not track.observations:
         raise ValueError("Cannot finalize an empty vehicle track")
@@ -275,11 +276,30 @@ def finalize_vehicle_track(
             if item.reading is not None
             and plate_key(item.reading.raw_text) == normalized
         ]
-        # A per-character winner may be a synthesis of glyphs that no single frame read
-        # verbatim; fall back to the readable frames so best-crop selection never empties.
+        # High vote confidence can still hide ONE doubtful character — a digit under a sticker
+        # or heavy glare that the model consistently misreads (e.g. D read as U). The overall
+        # score averages that away, so we surface the single weakest character across the
+        # winning frames: if even one position stays uncertain, the plate is flagged for human
+        # review instead of being trusted at face value.
+        weakest_character = min(
+            (
+                min(item.reading.character_confidences)
+                for item in matching_winner_observations
+                if item.reading is not None and item.reading.character_confidences
+            ),
+            default=1.0,
+        )
+        if weakest_character < weak_character_threshold:
+            flags.append("WEAK_CHARACTER")
+        # Show the CLEAREST crop of the whole pass — over ALL readable frames, not only the
+        # ones that read the vote winner. When early muddy frames outvote a sharp later one,
+        # restricting the crop to winner-matching frames displays a blurry plate while a crisp
+        # frame exists; the reviewer needs the sharpest evidence to confirm/correct.
+        readable_observations = [
+            item for item in plate_observations if item.reading is not None
+        ]
         best = max(
-            matching_winner_observations
-            or [item for item in plate_observations if item.reading is not None],
+            readable_observations or matching_winner_observations,
             key=lambda item: (
                 item.quality_score * _reading_reliability(item.reading),
                 min(item.reading.character_confidences)
@@ -515,20 +535,20 @@ def consolidate_vehicle_events(
             and event.end_timestamp_ms - event.start_timestamp_ms <= 1_500
             and near_readable_event
         )
-        # A single garbled OCR frame during another vehicle's pass becomes its own
-        # 1-frame track with a wildly different plate string (89C111522 misread as
-        # 01E111573). Edit-distance dedup can't bridge that, but a lone plated frame
-        # whose whole span sits inside a longer, higher-confidence plated event with a
-        # different reading is the same bike — it cannot be in two places at once.
-        contained_plate_fragment = (
-            event.plate_detection_count <= 1
+        # A vehicle's pass often spawns a short, weakly-read plate fragment with a different
+        # string (89C111522 misread as 01E111573; 29C204834 as 29A104114). Edit distance
+        # can't bridge those, but a brief low-evidence plate fragment that OVERLAPS in time a
+        # stronger plated event is the same bike — it cannot be in two places at once.
+        duplicate_plate_fragment = (
+            event.plate_detection_count <= 3
+            and event.end_timestamp_ms - event.start_timestamp_ms <= 2000
             and any(
                 other is not event
                 and other.plate_detection_count > event.plate_detection_count
                 and other.normalized_plate != event.normalized_plate
-                and other.start_timestamp_ms <= event.start_timestamp_ms
-                and event.end_timestamp_ms <= other.end_timestamp_ms
                 and (other.confidence or 0) >= (event.confidence or 0)
+                and event.start_timestamp_ms <= other.end_timestamp_ms
+                and event.end_timestamp_ms >= other.start_timestamp_ms
                 for other in plated
             )
         )
@@ -554,7 +574,7 @@ def consolidate_vehicle_events(
             or motion_only
             or weak_unreadable_plate
             or split_unreadable_fragment
-            or contained_plate_fragment
+            or duplicate_plate_fragment
             or card_false_positive
         ):
             continue

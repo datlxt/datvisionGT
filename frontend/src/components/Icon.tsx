@@ -24,6 +24,8 @@ type IconName =
   | "refresh"
   | "trash"
   | "scissors"
+  | "motorcycle"
+  | "car"
   | "x";
 
 export function Icon({
@@ -198,6 +200,25 @@ export function Icon({
         <path d="M20 4 8.12 15.88" />
         <path d="M14.47 14.48 20 20" />
         <path d="M8.12 8.12 12 12" />
+      </>
+    ),
+    motorcycle: (
+      <>
+        <circle cx="5.5" cy="16.5" r="3" />
+        <circle cx="18.5" cy="16.5" r="3" />
+        <path d="M5.5 16.5 8 10h5l2.5 4" />
+        <path d="M6.5 10H13" />
+        <path d="M13 10l1.5-3H17" />
+        <path d="M15.5 14 18.5 16.5" />
+      </>
+    ),
+    car: (
+      <>
+        <path d="M5 11l1.6-3.4A2 2 0 0 1 8.4 6.5h7.2a2 2 0 0 1 1.8 1.1L19 11" />
+        <path d="M4 11h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-1M6 17H4a1 1 0 0 1-1-1v-4" />
+        <path d="M8 17h8" />
+        <circle cx="7" cy="17" r="1.8" />
+        <circle cx="17" cy="17" r="1.8" />
       </>
     ),
   };

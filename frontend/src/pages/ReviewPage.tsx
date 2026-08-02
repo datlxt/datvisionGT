@@ -104,6 +104,23 @@ function classificationTone(event: EventResult) {
   return "neutral" as const;
 }
 
+// A case the reviewer should NOT trust at face value and must eyeball: unreadable / low
+// confidence, a "recognized" plate that still hides a doubtful character (occluded/glary digit
+// the model misreads confidently, e.g. D->U), a single-frame read, a poor crop, OR a vehicle
+// that came through with NO plate detected (needs a human to confirm it truly has none, not a
+// missed plate). All of these land together in the yellow "Cần xem lại" bucket, on the tab, and
+// on the video timeline — regardless of the % score.
+function isRiskyRead(event: EventResult): boolean {
+  return (
+    event.classification === "LOW_CONFIDENCE" ||
+    event.classification === "UNREADABLE" ||
+    event.classification === "NO_PLATE" ||
+    event.quality_flags.includes("WEAK_CHARACTER") ||
+    event.quality_flags.includes("SINGLE_READING_OCR") ||
+    (event.quality_score ?? 1) < 0.5
+  );
+}
+
 function toClock(ms: number): string {
   const total = Math.floor(Math.max(0, ms) / 1000);
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
@@ -163,8 +180,8 @@ export function ReviewPage({ job }: { job: Job }) {
       if (filter === "NO_PLATE") return event.classification === "NO_PLATE";
       if (filter === "REVIEW") {
         return (
-          event.classification === "LOW_CONFIDENCE" ||
-          event.classification === "UNREADABLE"
+          isRiskyRead(event) &&
+          gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED"
         );
       }
       if (filter === "CHECK") {
@@ -177,6 +194,15 @@ export function ReviewPage({ job }: { job: Job }) {
   const needCheckCount =
     results?.events.filter(
       (event) => gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED",
+    ).length ?? 0;
+
+  // Risky reads still WAITING for a human — drops as they get verified. Includes occluded
+  // "recognized" plates (WEAK_CHARACTER) so a confident-but-wrong read can't slip past review.
+  const needReviewCount =
+    results?.events.filter(
+      (event) =>
+        isRiskyRead(event) &&
+        gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED",
     ).length ?? 0;
 
   const totalMs = Math.max(
@@ -338,11 +364,7 @@ export function ReviewPage({ job }: { job: Job }) {
           {[
             ["ALL", "Tất cả", results.total],
             ["RECOGNIZED", "Đọc được", results.counts.RECOGNIZED ?? 0],
-            [
-              "REVIEW",
-              "Cần xem lại",
-              (results.counts.LOW_CONFIDENCE ?? 0) + (results.counts.UNREADABLE ?? 0),
-            ],
+            ["REVIEW", "Cần xem lại", needReviewCount],
             ["NO_PLATE", "Không biển", results.counts.NO_PLATE ?? 0],
             ["CHECK", "Cần kiểm tra", needCheckCount],
           ].map(([value, label, count]) => (
@@ -436,19 +458,39 @@ export function ReviewPage({ job }: { job: Job }) {
                   tabIndex={0}
                   title="Click bất kỳ đâu để tua video tới đúng vị trí đó"
                 >
-                  {results.events.map((event) => (
-                    <span
-                      className={`ct-seg ct-${event.classification.toLowerCase()}`}
-                      key={event.track_id}
-                      style={{
-                        left: `${(event.start_timestamp_ms / totalMs) * 100}%`,
-                        width: `${Math.max(
-                          0.5,
-                          ((event.end_timestamp_ms - event.start_timestamp_ms) / totalMs) * 100,
-                        )}%`,
-                      }}
-                    />
-                  ))}
+                  {results.events.map((event) => {
+                    // Risky reads (occluded/weak-character plates included) paint as the orange
+                    // "Cần xem lại" band even when the model marked them RECOGNIZED, so the
+                    // reviewer can spot the exact video moments that need a careful look.
+                    const risky = isRiskyRead(event);
+                    return (
+                      <span
+                        className={`ct-seg ct-${
+                          risky ? "low_confidence" : event.classification.toLowerCase()
+                        }${risky ? " ct-risky" : ""}`}
+                        key={event.track_id}
+                        title={
+                          risky
+                            ? `${
+                                event.normalized_plate ??
+                                (event.classification === "NO_PLATE"
+                                  ? "Xe không biển"
+                                  : "?")
+                              } — cần xem lại (${toClock(event.start_timestamp_ms)})`
+                            : `${event.normalized_plate ?? ""} (${toClock(
+                                event.start_timestamp_ms,
+                              )})`
+                        }
+                        style={{
+                          left: `${(event.start_timestamp_ms / totalMs) * 100}%`,
+                          width: `${Math.max(
+                            0.5,
+                            ((event.end_timestamp_ms - event.start_timestamp_ms) / totalMs) * 100,
+                          )}%`,
+                        }}
+                      />
+                    );
+                  })}
                   {suspectedGaps.map((gap) => (
                     <span
                       className="ct-gap"
@@ -488,10 +530,7 @@ export function ReviewPage({ job }: { job: Job }) {
                     <i className="ct-sw ct-recognized" /> Đã đọc biển
                   </span>
                   <span>
-                    <i className="ct-sw ct-no_plate" /> Xe không biển
-                  </span>
-                  <span>
-                    <i className="ct-sw ct-low_confidence" /> Cần xem lại
+                    <i className="ct-sw ct-low_confidence" /> Cần xem lại (gồm cả xe không biển)
                   </span>
                   <span>
                     <i className="ct-gap-legend" /> Nghi bỏ sót
@@ -613,6 +652,29 @@ export function ReviewPage({ job }: { job: Job }) {
                   {selected.quality_flags.map((flag) => (
                     <span key={flag}>{flag}</span>
                   ))}
+                </div>
+              )}
+              {selected.normalized_plate && isRiskyRead(selected) && (
+                <div className="prediction-warning" role="alert">
+                  <Icon name="alert" size={18} />
+                  <p>
+                    {selected.quality_flags.includes("WEAK_CHARACTER") ? (
+                      <>
+                        <strong>
+                          Cẩn thận — có ký tự bị che / chói, model có thể đọc SAI dù % cao.
+                        </strong>{" "}
+                        Biển này có ít nhất 1 ký tự model không chắc (thường do tem/vật che hoặc
+                        đèn rọi). Phóng to crop, đối chiếu TỪNG ký tự với video trước khi xác nhận
+                        (vd: D dễ bị đọc thành U).
+                      </>
+                    ) : (
+                      <>
+                        <strong>Cẩn thận — biển khó, model có thể đọc SAI dù % cao.</strong> Chói /
+                        mờ / che hoặc chỉ đọc 1 frame. Nhìn kỹ crop + video, đối chiếu từng ký tự
+                        trước khi xác nhận (đừng tin số % một mình).
+                      </>
+                    )}
+                  </p>
                 </div>
               )}
             </section>

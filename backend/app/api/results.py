@@ -326,24 +326,26 @@ def _merge_persisted_motion_candidates(
             }
         )
 
-    # A single garbled OCR frame during another vehicle's pass gets spun into its own
-    # 1-frame track carrying a wildly different plate string (e.g. 89C111522 misread as
-    # 01E111573). Edit-distance dedup can't bridge that jump, but a lone plated frame
-    # whose whole span sits inside a longer, higher-confidence plated event with a
-    # different reading is the same physical bike — it cannot be in two places at once.
+    # One vehicle's pass often spawns a short, weakly-read plate fragment carrying a
+    # different string (89C111522 misread as 01E111573; 29C204834 as 29A104114). Edit
+    # distance can't bridge those, but a brief low-evidence plate fragment that OVERLAPS
+    # in time a stronger plated event is the same physical bike — it cannot be in two
+    # places at once — so the misread fragment is dropped and the good read kept.
     plated_events = [event for event in variant_merged if event.plate_detection_count > 0]
     variant_merged = [
         event
         for event in variant_merged
         if not (
-            event.plate_detection_count <= 1
+            event.plate_detection_count <= 3
+            and event.end_timestamp_ms - event.start_timestamp_ms <= 2000
             and any(
                 other is not event
                 and other.plate_detection_count > event.plate_detection_count
                 and other.normalized_plate != event.normalized_plate
-                and other.start_timestamp_ms <= event.start_timestamp_ms
-                and event.end_timestamp_ms <= other.end_timestamp_ms
                 and (other.confidence or 0) >= (event.confidence or 0)
+                # time intervals intersect (overlap), not merely containment
+                and event.start_timestamp_ms <= other.end_timestamp_ms
+                and event.end_timestamp_ms >= other.start_timestamp_ms
                 for other in plated_events
             )
         )

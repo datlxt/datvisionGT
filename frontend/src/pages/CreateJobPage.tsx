@@ -299,7 +299,7 @@ export function CreateJobPage({
                   type="button"
                 >
                   <div className="selection-card-top">
-                    <Icon name="plate" size={24} />
+                    <Icon name="motorcycle" size={24} />
                     <span>Mặc định</span>
                   </div>
                   <strong>Xe máy</strong>
@@ -313,7 +313,7 @@ export function CreateJobPage({
                   type="button"
                 >
                   <div className="selection-card-top">
-                    <Icon name="scan" size={24} />
+                    <Icon name="car" size={24} />
                     <span>Mới</span>
                   </div>
                   <strong>Ô tô con</strong>

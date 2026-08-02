@@ -457,22 +457,16 @@ def test_distinct_sequential_no_plate_vehicles_are_kept_separate() -> None:
     assert len(merged) == 2
 
 
-def test_best_frame_must_agree_with_track_vote() -> None:
+def test_best_crop_is_the_clearest_frame_even_if_it_read_differently() -> None:
+    # For review, the crop must be the SHARPEST frame of the pass so the human can confirm
+    # or correct — even if the model read that frame differently from the vote winner. The
+    # reading still comes from the multi-frame vote; only the displayed evidence follows
+    # clarity (fixes: early muddy frame cropped while a later crisp frame is ignored).
     track = VehicleTrack(
         "VEHICLE_000001",
         [
-            observation(
-                1,
-                with_plate=True,
-                text="29X201482",
-                quality_score=0.75,
-            ),
-            observation(
-                2,
-                with_plate=True,
-                text="29X201482",
-                quality_score=0.70,
-            ),
+            observation(1, with_plate=True, text="29X201482", quality_score=0.75),
+            observation(2, with_plate=True, text="29X201482", quality_score=0.70),
             observation(
                 3,
                 with_plate=True,
@@ -483,8 +477,8 @@ def test_best_frame_must_agree_with_track_vote() -> None:
         ],
     )
     result = finalize_vehicle_track(track)
-    assert result.normalized_plate == "29X201482"
-    assert result.best_observation.frame_number == 1
+    assert result.normalized_plate == "29X201482"  # reading = multi-frame vote
+    assert result.best_observation.frame_number == 3  # crop = clearest frame
 
 
 def test_best_frame_penalizes_one_glared_character() -> None:

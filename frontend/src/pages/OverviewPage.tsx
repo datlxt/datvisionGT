@@ -15,10 +15,10 @@ import type { CondenseStatus, Job } from "../types";
 
 type Scope = "video" | "motorcycle" | "car";
 
-const scopeOptions: { key: Scope; label: string; icon: "video" | "plate" | "scan" }[] = [
+const scopeOptions: { key: Scope; label: string; icon: "video" | "motorcycle" | "car" }[] = [
   { key: "video", label: "Video", icon: "video" },
-  { key: "motorcycle", label: "Xe máy", icon: "plate" },
-  { key: "car", label: "Ô tô", icon: "scan" },
+  { key: "motorcycle", label: "Xe máy", icon: "motorcycle" },
+  { key: "car", label: "Ô tô", icon: "car" },
 ];
 
 const condenseLabels: Record<string, string> = {
@@ -45,7 +45,7 @@ export function OverviewPage({
   onOpen,
 }: {
   jobs: Job[];
-  onCreate: () => void;
+  onCreate: (scope: Scope) => void;
   onDelete: (job: Job) => Promise<void>;
   onOpen: (job: Job) => void;
 }) {
@@ -109,19 +109,21 @@ export function OverviewPage({
         title="Tổng quan Ground Truth"
       />
 
-      <div className="overview-scope" role="tablist">
-        {scopeOptions.map((option) => (
-          <button
-            aria-selected={scope === option.key}
-            className={scope === option.key ? "active" : ""}
-            key={option.key}
-            onClick={() => setScope(option.key)}
-            role="tab"
-            type="button"
-          >
-            <Icon name={option.icon} size={17} /> {option.label}
-          </button>
-        ))}
+      <div className="overview-scope-row">
+        <div className="overview-scope" role="tablist">
+          {scopeOptions.map((option) => (
+            <button
+              aria-selected={scope === option.key}
+              className={scope === option.key ? "active" : ""}
+              key={option.key}
+              onClick={() => setScope(option.key)}
+              role="tab"
+              type="button"
+            >
+              <Icon name={option.icon} size={17} /> {option.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="kpi-grid">

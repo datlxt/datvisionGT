@@ -1231,6 +1231,19 @@ code {
   background: #f59e0b;
 }
 
+/* Occluded / weak-character reads the reviewer must double-check: brighter amber with a
+   striped overlay so they stand out from ordinary low-confidence bands on the timeline. */
+.case-timeline .ct-seg.ct-risky {
+  background-image: repeating-linear-gradient(
+    45deg,
+    #f59e0b,
+    #f59e0b 3px,
+    #d97706 3px,
+    #d97706 6px
+  );
+  box-shadow: 0 0 0 1px #b45309;
+}
+
 .ct-unreadable {
   background: #f97316;
 }
@@ -2677,12 +2690,50 @@ code {
   }
 }
 
+/* Risky-case warning in the review prediction panel */
+.prediction-warning {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--warning);
+  border-radius: 12px;
+  background: #fff7ec;
+}
+
+.prediction-warning svg {
+  flex-shrink: 0;
+  color: var(--warning);
+  margin-top: 1px;
+}
+
+.prediction-warning p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #8a5a10;
+}
+
+.prediction-warning strong {
+  color: #8a5a10;
+}
+
 /* Overview scope selector (Video / Xe máy / Ô tô) */
+/* Keep the scope pill on the same left axis as the header and KPI cards, which are centered
+   in a 1360px column on wide screens. The row is that centered column; the pill left-aligns
+   inside it. */
+.overview-scope-row {
+  max-width: 1360px;
+  margin: 0 auto 20px;
+}
+
 .overview-scope {
   display: inline-flex;
   gap: 4px;
   padding: 4px;
-  margin-bottom: 20px;
+  max-width: 100%;
+  overflow-x: auto;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -2693,6 +2744,8 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: 8px 16px;
   border: none;
   border-radius: 9px;
@@ -2843,8 +2896,38 @@ button.selection-card:hover:not(.selected) {
   background: #05121f;
 }
 
+@media (max-width: 900px) {
+  .vehicle-type-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 720px) {
   .condense-stats {
     grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .condense-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .condense-actions {
+    flex-direction: column;
+  }
+
+  .condense-actions .button,
+  .condense-actions > a {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .condense-preview {
+    max-height: 260px;
+  }
+
+  .condense-stats strong {
+    font-size: 20px;
   }
 }

@@ -115,6 +115,37 @@ class FastAlprPlateEngine:
         # means enhancement can only rescue a dirty read, never corrupt a clean one.
         raw_reading = self._read(crop)
         enhanced_reading = self._read(enhance_for_ocr(crop))
+        if (
+            raw_reading is not None
+            and enhanced_reading is not None
+            and raw_reading.raw_text == enhanced_reading.raw_text
+            and len(raw_reading.character_confidences)
+            == len(enhanced_reading.character_confidences)
+        ):
+            # Both passes read the SAME plate: keep the more-confident overall read, but expose
+            # the WEAKEST per-character confidence across both. This matters for physically
+            # occluded plates (a sticker over a digit): CLAHE can visually "clean up" the
+            # covered glyph into a wrong-but-confident letter (D->U), so the enhanced pass alone
+            # looks certain. Taking the per-position minimum keeps that character's true doubt
+            # visible downstream so the plate can be routed to human review.
+            winner = (
+                enhanced_reading
+                if enhanced_reading.confidence > raw_reading.confidence
+                else raw_reading
+            )
+            merged = tuple(
+                min(a, b)
+                for a, b in zip(
+                    raw_reading.character_confidences,
+                    enhanced_reading.character_confidences,
+                    strict=True,
+                )
+            )
+            return PlateReading(
+                raw_text=winner.raw_text,
+                confidence=winner.confidence,
+                character_confidences=merged,
+            )
         if enhanced_reading is not None and (
             raw_reading is None or enhanced_reading.confidence > raw_reading.confidence
         ):

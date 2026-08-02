@@ -449,6 +449,12 @@ def auto_verify_ground_truth(
             or event.confidence is None
             or event.confidence < payload.min_confidence
             or not event.normalized_plate
+            # Confidence is not correctness: a degraded crop, a single-frame read, or a plate
+            # with one occluded/glary character can be confidently WRONG (29D misread as 29U at
+            # 96%). Keep those for a human instead of auto-verifying them.
+            or "SINGLE_READING_OCR" in event.quality_flags
+            or "WEAK_CHARACTER" in event.quality_flags
+            or (event.quality_score is not None and event.quality_score < 0.55)
         ):
             continue
         record = session.scalar(

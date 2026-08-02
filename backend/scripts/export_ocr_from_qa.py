@@ -75,11 +75,22 @@ def _plate_like(bbox: tuple[int, int, int, int]) -> bool:
     return width >= 40 and height >= 20 and 0.9 <= width / height <= 2.6
 
 
+# Hard plates (glare, occlusion, wear, dirt, warped) are what the model needs most, so we
+# oversample them; clean plates get fewer frames to keep the set focused on the hard ones.
+_HARD_KEYWORDS = ("chói", "che", "mờ", "xước", "cũ", "bẩn", "biến dạng", "cong", "vênh")
+
+
+def _is_hard(classification: object) -> bool:
+    text = str(classification or "").lower()
+    return any(word in text for word in _HARD_KEYWORDS)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
-    parser.add_argument("--frames-per-plate", type=int, default=25)
+    parser.add_argument("--frames-per-plate", type=int, default=30, help="frames for HARD plates")
+    parser.add_argument("--easy-frames", type=int, default=10, help="frames for clean plates")
     parser.add_argument("--sample-every-ms", type=int, default=150)
     parser.add_argument("--max-edit-distance", type=int, default=3)
     parser.add_argument("--val-ratio", type=float, default=0.15)
@@ -110,11 +121,13 @@ def main() -> None:
         rows = list(sheet.iter_rows(values_only=True))
         workbook.close()
         header = rows[0]
-        col_from = _column_index(header, "từ", "start", "from")
-        col_to = _column_index(header, "đến", "end", "to")
-        col_gt = _column_index(header, "biển số đúng", "gt", "expected")
-        if None in (col_from, col_to, col_gt):
-            print(f"skip (columns not found): {qa_path.name}")
+        col_from = _column_index(header, "từ", "start")
+        col_to = _column_index(header, "đến", "end")
+        col_range = _column_index(header, "from - to", "from-to", "from -", "khoảng thời")
+        col_gt = _column_index(header, "license plate expected", "biển số đúng", "expected")
+        col_class = _column_index(header, "phân loại")
+        if col_gt is None or (col_range is None and (col_from is None or col_to is None)):
+            print(f"skip (columns not found): {qa_path.name} -> {[str(c) for c in header]}")
             continue
 
         capture = cv2.VideoCapture(str(video))
@@ -124,13 +137,23 @@ def main() -> None:
             plate = _norm(row[col_gt] or "")
             if not _valid_plate(plate):
                 continue
-            start_ms = _parse_time_ms(row[col_from]) if col_from < len(row) else None
-            end_ms = _parse_time_ms(row[col_to]) if col_to < len(row) else None
+            if col_range is not None and col_range < len(row) and row[col_range]:
+                parts = [
+                    p.strip()
+                    for p in str(row[col_range]).replace("–", "-").replace("—", "-").split("-")
+                ]
+                start_ms = _parse_time_ms(parts[0])
+                end_ms = _parse_time_ms(parts[-1]) if len(parts) >= 2 else None
+            else:
+                start_ms = _parse_time_ms(row[col_from]) if col_from < len(row) else None
+                end_ms = _parse_time_ms(row[col_to]) if col_to < len(row) else None
             if start_ms is None or end_ms is None or end_ms < start_ms:
                 continue
+            hard = col_class is not None and col_class < len(row) and _is_hard(row[col_class])
+            target = args.frames_per_plate if hard else args.easy_frames
             saved = 0
             for timestamp in range(start_ms, end_ms + 1, args.sample_every_ms):
-                if saved >= args.frames_per_plate:
+                if saved >= target:
                     break
                 capture.set(cv2.CAP_PROP_POS_MSEC, timestamp)
                 ok, frame = capture.read()
