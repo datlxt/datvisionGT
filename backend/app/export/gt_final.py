@@ -24,8 +24,10 @@ from app.export.plate_report import (
     _HEADER_BORDER,
     _HEADER_FILL,
     _HEADER_FONT,
+    _PX_TO_PT,
     _QUALITY_LIST_SHEET,
     _QUALITY_OPTIONS,
+    _ROW_PAD_PT,
     MISSING_IMAGE_TEXT,
     _scaled_image,
     format_timestamp,
@@ -39,8 +41,8 @@ _RESULT_OPTIONS = "TP,FP,FN,NA"
 _COLUMNS: tuple[tuple[str, int], ...] = (
     ("No", 6),
     ("From - To", 14),
-    ("Ảnh cam toàn cảnh", 30),
-    ("Ảnh biển số", 22),
+    ("Ảnh cam toàn cảnh", 70),
+    ("Ảnh biển số", 36),
     ("License Plate expected", 22),
     ("Phân loại biển số", 22),
     ("Biển số model trả về", 22),
@@ -51,10 +53,11 @@ _COLUMNS: tuple[tuple[str, int], ...] = (
 GT_FINAL_HEADERS: tuple[str, ...] = tuple(header for header, _ in _COLUMNS)
 _COL = {header: index for index, (header, _) in enumerate(_COLUMNS, start=1)}
 
-_FRAME_WIDTH_PX = 190
-_CROP_WIDTH_PX = 125
-_CROP_HEIGHT_PX = 60
-_ROW_HEIGHT_PT = 64
+# Full-frame evidence embedded large (LANCZOS + high JPEG quality via _scaled_image) so the
+# reviewer can read the scene; the plate crop a bit smaller. Row height grows to fit them.
+_FRAME_WIDTH_PX = 480
+_CROP_WIDTH_PX = 240
+_ROW_HEIGHT_PT = 64  # minimum row height (used when a row has no full-frame image)
 _HEADER_ROW = 11  # summary block occupies rows 1..9
 
 
@@ -138,20 +141,27 @@ def build_gt_final_workbook(rows: list[GtFinalRow]) -> Workbook:
             cell = sheet.cell(row=excel_row, column=column, value=values.get(column))
             cell.border = _CELL_BORDER
             cell.alignment = _CENTER_ALIGN if column in (1, 2, 9) else _CELL_ALIGN
-        sheet.row_dimensions[excel_row].height = _ROW_HEIGHT_PT
         quality_validation.add(sheet.cell(row=excel_row, column=_COL["Phân loại biển số"]))
         result_validation.add(sheet.cell(row=excel_row, column=_COL["TP/FP/FN/NA"]))
 
+        # Grow the row to fit the tallest embedded image so the full frame shows in full.
+        row_height_pt = _ROW_HEIGHT_PT
         if row.full_frame_path is not None and row.full_frame_path.is_file():
             anchor = f"{get_column_letter(_COL['Ảnh cam toàn cảnh'])}{excel_row}"
-            sheet.add_image(_scaled_image(row.full_frame_path, _FRAME_WIDTH_PX), anchor)
+            frame_image = _scaled_image(row.full_frame_path, _FRAME_WIDTH_PX)
+            sheet.add_image(frame_image, anchor)
+            row_height_pt = max(row_height_pt, frame_image.height * _PX_TO_PT + _ROW_PAD_PT)
         else:
             sheet.cell(row=excel_row, column=_COL["Ảnh cam toàn cảnh"], value=MISSING_IMAGE_TEXT)
 
         if row.crop_path is not None and row.crop_path.is_file():
             anchor = f"{get_column_letter(_COL['Ảnh biển số'])}{excel_row}"
-            sheet.add_image(_scaled_image(row.crop_path, _CROP_WIDTH_PX, _CROP_HEIGHT_PX), anchor)
+            crop_image = _scaled_image(row.crop_path, _CROP_WIDTH_PX)
+            sheet.add_image(crop_image, anchor)
+            row_height_pt = max(row_height_pt, crop_image.height * _PX_TO_PT + _ROW_PAD_PT)
         else:
             sheet.cell(row=excel_row, column=_COL["Ảnh biển số"], value=MISSING_IMAGE_TEXT)
+
+        sheet.row_dimensions[excel_row].height = row_height_pt
 
     return workbook

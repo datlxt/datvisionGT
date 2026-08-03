@@ -539,9 +539,12 @@ def consolidate_vehicle_events(
         # string (89C111522 misread as 01E111573; 29C204834 as 29A104114). Edit distance
         # can't bridge those, but a brief low-evidence plate fragment that OVERLAPS in time a
         # stronger plated event is the same bike — it cannot be in two places at once.
+        # A weak plate fragment (≤3 readable frames) overlapping a stronger plated event is the
+        # same physical bike — it cannot be in two places at once. Drop it when EITHER it is
+        # short (≤2s) OR the overlapping event dominates by readable frames (e.g. 1 read vs 61):
+        # a real second bike keeps its own sustained track, not a lone misread frame.
         duplicate_plate_fragment = (
             event.plate_detection_count <= 3
-            and event.end_timestamp_ms - event.start_timestamp_ms <= 2000
             and any(
                 other is not event
                 and other.plate_detection_count > event.plate_detection_count
@@ -549,6 +552,10 @@ def consolidate_vehicle_events(
                 and (other.confidence or 0) >= (event.confidence or 0)
                 and event.start_timestamp_ms <= other.end_timestamp_ms
                 and event.end_timestamp_ms >= other.start_timestamp_ms
+                and (
+                    event.end_timestamp_ms - event.start_timestamp_ms <= 2000
+                    or other.plate_detection_count >= event.plate_detection_count * 5
+                )
                 for other in plated
             )
         )

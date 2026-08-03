@@ -2825,32 +2825,9 @@ button.selection-card:hover:not(.selected) {
   margin-top: 16px;
 }
 
-.condense-progress {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.condense-progress-bar {
-  flex: 1;
-  height: 10px;
-  border-radius: 999px;
-  background: var(--blue-light);
-  overflow: hidden;
-}
-
-.condense-progress-bar span {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #0e6cff, #3a8dff);
-  transition: width 0.4s ease;
-}
-
-.condense-progress strong {
-  color: var(--blue);
-  min-width: 44px;
-  text-align: right;
+/* Spin only the refresh glyph (not its badge) while a condense job runs, to signal progress. */
+.section-heading-spin svg {
+  animation: spin 900ms linear infinite;
 }
 
 .condense-stats {

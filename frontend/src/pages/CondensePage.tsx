@@ -7,7 +7,7 @@ import {
 } from "react";
 
 import { Icon } from "../components/Icon";
-import { PageHeader, StatusBadge } from "../components/ui";
+import { PageHeader, ProgressBar, StatusBadge } from "../components/ui";
 import { api } from "../lib/api";
 import { formatBytes, formatTime } from "../lib/format";
 import type { CondenseStatus } from "../types";
@@ -237,7 +237,7 @@ export function CondensePage({ onSentToJob }: { onSentToJob: (jobId: string) => 
           {processing && (
             <>
               <header className="section-heading">
-                <span>
+                <span className="section-heading-spin">
                   <Icon name="refresh" size={18} />
                 </span>
                 <div>
@@ -245,11 +245,12 @@ export function CondensePage({ onSentToJob }: { onSentToJob: (jobId: string) => 
                   <p>{stageLabels[status.status] ?? "Đang xử lý…"}</p>
                 </div>
               </header>
-              <div className="condense-progress">
-                <div className="condense-progress-bar">
-                  <span style={{ width: `${progressPercent}%` }} />
+              <div className="pipeline-progress">
+                <div>
+                  <span>Tiến độ cắt video</span>
+                  <strong>{progressPercent}%</strong>
                 </div>
-                <strong>{progressPercent}%</strong>
+                <ProgressBar value={progressPercent} />
               </div>
             </>
           )}

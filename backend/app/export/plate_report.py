@@ -27,8 +27,8 @@ MISSING_IMAGE_TEXT = "Không có ảnh"
 # (header, width) pairs, in reviewer order. Column indices are derived from this tuple.
 _COLUMNS: tuple[tuple[str, int], ...] = (
     ("STT", 6),
-    ("Ảnh frame", 30),
-    ("Ảnh crop biển số", 22),
+    ("Ảnh frame", 70),
+    ("Ảnh crop biển số", 36),
     ("TrackID", 16),
     ("Plate model đọc", 18),
     ("Phân loại", 16),
@@ -63,10 +63,15 @@ _QUALITY_OPTIONS = (
 _QUALITY_LIST_SHEET = "Lists"
 
 _QA_OPTIONS = "Đúng,Sai,Trùng,Không biển,Ảnh mờ,Cần kiểm tra"
-_FRAME_WIDTH_PX = 200
-_CROP_WIDTH_PX = 125
-_CROP_HEIGHT_PX = 60
-_ROW_HEIGHT_PT = 86
+# Full-frame evidence is embedded large so the reviewer can actually read the scene; the crop
+# a bit smaller. Both are resampled with LANCZOS + high JPEG quality so they stay sharp (the
+# source frames are stored at native resolution, so the only blur was the old 200px downscale).
+_FRAME_WIDTH_PX = 480
+_CROP_WIDTH_PX = 240
+_ROW_HEIGHT_PT = 86  # minimum row height (used when a row has no full-frame image)
+# Excel row height is in points; 1 image pixel ≈ 0.75 pt. A little padding keeps a margin.
+_PX_TO_PT = 0.75
+_ROW_PAD_PT = 6
 _CENTERED_COLUMNS = {_COL["STT"], _COL["TrackID"], _COL["Confidence"], _COL["Frame #"]}
 
 _HEADER_FILL = PatternFill(fill_type="solid", fgColor="D9EAF7")
@@ -116,17 +121,18 @@ def quality_prefill(classification: str) -> str:
 
 
 def _scaled_image(path: Path, width_px: int, height_px: int | None = None) -> XlsxImage:
-    """Downscale the source to keep the workbook small, then embed it."""
+    """Resample the source to the target width (LANCZOS, high quality) and embed it."""
 
     from PIL import Image as PilImage
 
+    resampling = getattr(PilImage, "Resampling", PilImage).LANCZOS
     with PilImage.open(path) as source:
         rgb = source.convert("RGB")
         if height_px is None:
             height_px = max(1, round(rgb.height * width_px / rgb.width))
-        rgb = rgb.resize((width_px, height_px))
+        rgb = rgb.resize((width_px, height_px), resampling)
         buffer = io.BytesIO()
-        rgb.save(buffer, format="JPEG", quality=80)
+        rgb.save(buffer, format="JPEG", quality=90)
     buffer.seek(0)
     image = XlsxImage(buffer)
     image.width = width_px
@@ -188,23 +194,28 @@ def build_plate_report_workbook(rows: list[PlateReportRow]) -> Workbook:
             cell = sheet.cell(row=excel_row, column=column, value=values.get(column))
             cell.border = _CELL_BORDER
             cell.alignment = _CENTER_ALIGN if column in _CENTERED_COLUMNS else _CELL_ALIGN
-        sheet.row_dimensions[excel_row].height = _ROW_HEIGHT_PT
         qa_validation.add(sheet.cell(row=excel_row, column=_COL["Kết quả QA"]))
         quality_validation.add(sheet.cell(row=excel_row, column=_COL["Phân loại"]))
 
+        # Track the tallest embedded image so the row grows to show the full frame in full.
+        row_height_pt = _ROW_HEIGHT_PT
         if row.full_frame_path is not None and row.full_frame_path.is_file():
             frame_cell = f"{get_column_letter(_COL['Ảnh frame'])}{excel_row}"
-            sheet.add_image(_scaled_image(row.full_frame_path, _FRAME_WIDTH_PX), frame_cell)
+            frame_image = _scaled_image(row.full_frame_path, _FRAME_WIDTH_PX)
+            sheet.add_image(frame_image, frame_cell)
+            row_height_pt = max(row_height_pt, frame_image.height * _PX_TO_PT + _ROW_PAD_PT)
         else:
             sheet.cell(row=excel_row, column=_COL["Ảnh frame"], value=MISSING_IMAGE_TEXT)
 
         if row.crop_path is not None and row.crop_path.is_file():
             crop_cell = f"{get_column_letter(_COL['Ảnh crop biển số'])}{excel_row}"
-            sheet.add_image(
-                _scaled_image(row.crop_path, _CROP_WIDTH_PX, _CROP_HEIGHT_PX), crop_cell
-            )
+            crop_image = _scaled_image(row.crop_path, _CROP_WIDTH_PX)
+            sheet.add_image(crop_image, crop_cell)
+            row_height_pt = max(row_height_pt, crop_image.height * _PX_TO_PT + _ROW_PAD_PT)
         else:
             sheet.cell(row=excel_row, column=_COL["Ảnh crop biển số"], value=MISSING_IMAGE_TEXT)
+
+        sheet.row_dimensions[excel_row].height = row_height_pt
 
     sheet.auto_filter.ref = f"A1:{get_column_letter(len(_COLUMNS))}{len(rows) + 1}"
     return workbook

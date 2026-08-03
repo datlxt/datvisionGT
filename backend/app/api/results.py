@@ -337,7 +337,6 @@ def _merge_persisted_motion_candidates(
         for event in variant_merged
         if not (
             event.plate_detection_count <= 3
-            and event.end_timestamp_ms - event.start_timestamp_ms <= 2000
             and any(
                 other is not event
                 and other.plate_detection_count > event.plate_detection_count
@@ -346,6 +345,13 @@ def _merge_persisted_motion_candidates(
                 # time intervals intersect (overlap), not merely containment
                 and event.start_timestamp_ms <= other.end_timestamp_ms
                 and event.end_timestamp_ms >= other.start_timestamp_ms
+                # Drop the weak fragment when EITHER it is short (≤2s) OR the overlapping
+                # event dominates by readable frames (e.g. 1 read vs 61 = same bike whose
+                # entry was briefly misread). Wall-clock alone missed long thin fragments.
+                and (
+                    event.end_timestamp_ms - event.start_timestamp_ms <= 2000
+                    or other.plate_detection_count >= event.plate_detection_count * 5
+                )
                 for other in plated_events
             )
         )
