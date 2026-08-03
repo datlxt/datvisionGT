@@ -101,8 +101,13 @@ export function OverviewPage({
     <section className="page overview-page">
       <PageHeader
         action={
-          <button className="button button-primary" onClick={onCreate} type="button">
-            <Icon name="plus" size={19} /> Tạo job mới
+          <button
+            className="button button-primary"
+            onClick={() => onCreate(scope)}
+            type="button"
+          >
+            <Icon name={isVideo ? "scissors" : "plus"} size={19} />{" "}
+            {isVideo ? "Cắt video mới" : "Tạo job mới"}
           </button>
         }
         description="Theo dõi tiến độ xử lý video và các job đang chờ kiểm duyệt."
@@ -263,7 +268,11 @@ export function OverviewPage({
             {scoped.length === 0 ? (
               <EmptyState
                 action={
-                  <button className="button button-primary" onClick={onCreate} type="button">
+                  <button
+                    className="button button-primary"
+                    onClick={() => onCreate(scope)}
+                    type="button"
+                  >
                     Tạo job đầu tiên
                   </button>
                 }

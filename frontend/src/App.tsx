@@ -14,6 +14,7 @@ import type { Health, Job, View } from "./types";
 
 export default function App() {
   const [view, setView] = useState<View>("create");
+  const [createVehicleType, setCreateVehicleType] = useState<"motorcycle" | "car">("motorcycle");
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
@@ -94,7 +95,16 @@ export default function App() {
       content = (
         <OverviewPage
           jobs={jobs}
-          onCreate={() => setView("create")}
+          onCreate={(scope) => {
+            // Video scope creates a condensed video (Cắt video); the vehicle scopes share the
+            // normal job-creation flow, pre-selecting the matching vehicle type.
+            if (scope === "video") {
+              setView("condense");
+              return;
+            }
+            setCreateVehicleType(scope);
+            setView("create");
+          }}
           onDelete={deleteJob}
           onOpen={openJob}
         />
@@ -103,6 +113,7 @@ export default function App() {
   } else if (view === "create") {
     content = (
       <CreateJobPage
+        initialVehicleType={createVehicleType}
         onDraftSaved={upsertJob}
         onStarted={(job) => {
           upsertJob(job);

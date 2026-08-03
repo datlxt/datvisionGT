@@ -1,13 +1,43 @@
 # DatVision GT
 
-## Current MVP: xe máy qua trạm, camera phía sau
+## Current MVP: xe máy (và ô tô con) qua trạm, camera phía sau
 
-Luồng đang triển khai thật là: upload video -> phát hiện xe máy -> tracking từng lượt xe -> phát
-hiện biển -> OCR nhiều frame -> voting -> lưu PostgreSQL -> xuất danh sách mở được bằng Excel.
-Mỗi lượt xe có một record dự thảo, gồm cả `NO_PLATE`, `UNREADABLE` và `LOW_CONFIDENCE`; hệ thống
-không chỉ xuất các biển đọc được. Motion-only được giữ làm candidate kiểm duyệt chứ không tự động
-kết luận xe không biển. Model mặc định là YOLOX-tiny (xe máy), YOLOv9-T-512 từ open-image-models
-(biển) và CCT-XS-v2 từ fast-plate-ocr (OCR), chạy ONNX Runtime CPU.
+Định danh pipeline hiện tại: **`motorcycle-alpr-v4`**. Toàn bộ xử lý chạy **offline bằng ONNX
+Runtime CPU** — không gọi API AI ngoài trong lúc xử lý video.
+
+**Luồng đang chạy thật (end-to-end):**
+
+```text
+Upload video
+  → (tùy chọn) Cắt video: bỏ đoạn không có xe, ghép lại còn đúng phần có phương tiện
+  → Trích evidence (~4 FPS) kèm frame gốc + timestamp thật
+  → Phát hiện phương tiện  (YOLOX-Tiny; xe máy=class 3, ô tô=class 2) + chuyển động MOG2
+  → Tracking từng lượt xe   (GreedyVehicleTracker theo IoU)
+  → Phát hiện biển          (YOLOv9-T-512, open-image-models)
+  → OCR nhiều frame         (CCT-XS-v2, fast-plate-ocr) + tăng cường ảnh (CLAHE) + dual-OCR
+  → Sửa ngữ pháp biển VN + bỏ phiếu theo từng ký tự (grammar repair + per-char voting)
+  → Chọn frame biển rõ nhất (quality score: nét/độ phân giải/tương phản/chói)
+  → Gom trùng theo biển đã chuẩn hóa (một biển ⇒ một event/job)
+  → Lưu PostgreSQL kèm artifact bằng chứng (crop + full frame)
+  → Con người kiểm duyệt trên web (xác nhận / sửa / loại / bổ sung)
+  → Xuất danh sách mở được bằng Excel (CSV kỹ thuật 20 cột hiện có)
+```
+
+Mỗi lượt xe là một record dự thảo, gồm cả `NO_PLATE`, `UNREADABLE` và `LOW_CONFIDENCE`; hệ thống
+**không chỉ** xuất biển đọc được. Motion-only (chỉ có chuyển động, không có detection ngữ nghĩa)
+được giữ làm candidate kiểm duyệt chứ không tự động kết luận xe không biển.
+
+**Cơ chế kiểm soát chất lượng đọc biển** (điểm khác biệt so với ALPR thường): một biển đọc với
+% cao vẫn có thể SAI khi bị tem/vật che hoặc đèn rọi chói (ví dụ `D` bị đọc thành `U`). Vì % tổng
+là trung bình nên nó che mất một ký tự nghi ngờ. Hệ thống lấy **độ tự tin của ký tự yếu nhất**
+(min per-character confidence, hợp nhất giữa lần đọc raw và lần tăng cường) để gắn cờ
+`WEAK_CHARACTER`; những case này bị đẩy vào nhóm **"Cần xem lại"**, hiện cảnh báo, tô nổi trên
+timeline video và **không được tự động duyệt**. Xe không biển cũng gộp vào cùng nhóm "Cần xem lại".
+
+Model mặc định: **YOLOX-Tiny** (phương tiện), **YOLOv9-T-512** từ open-image-models (biển),
+**CCT-XS-v2** từ fast-plate-ocr (OCR). OCR có thể **fine-tune** theo dữ liệu Lane 9 (tập trung
+các case xấu: che vật lý, chói, mờ, ký tự dễ nhầm) — xem
+[`docs/19-ocr-finetune-guide.md`](docs/19-ocr-finetune-guide.md) và notebook Colab kèm theo.
 
 Hướng dẫn kỹ thuật và deploy: [`docs/16-motorcycle-alpr-mvp.md`](docs/16-motorcycle-alpr-mvp.md).
 
@@ -80,14 +110,56 @@ Hệ thống tạo:
 
 ---
 
+## 1.2. Luồng nghiệp vụ & công nghệ theo từng công đoạn (bản đang chạy)
+
+Bảng dưới đây mô tả **đúng phần đã triển khai** cho pipeline `motorcycle-alpr-v4`: mỗi công đoạn
+giải quyết nghiệp vụ gì, dùng công nghệ nào, và xử lý ra sao. Tất cả chạy offline trên ONNX
+Runtime CPU trong worker (RQ + Redis).
+
+| # | Công đoạn | Nghiệp vụ cần giải quyết | Công nghệ | Cách xử lý |
+|---|---|---|---|---|
+| 0 | **Cắt video** (tùy chọn) | Video gốc có nhiều đoạn "chết" không có xe → tốn thời gian xem/xử lý | PyAV (libav) + libx264, detector tổng hợp (YOLOX + MOG2) | Quét video tìm mốc có phương tiện → `plan_segments` gộp đoạn gần nhau → `render_condensed_video` ghép lại thành 1 video ngắn; tải về hoặc đẩy thẳng sang tạo job GT |
+| 1 | **Upload & probe** | Nhận video, đọc metadata thật (fps, duration, resolution) | FastAPI + ffprobe qua PyAV | Lưu file nguồn, tạo `processing_job`, ghi `config_snapshot` (gồm `vehicle_type`) |
+| 2 | **Trích evidence** | "No evidence, no record" — mọi kết luận phải truy ngược được về frame + timestamp | OpenCV / PyAV decode | Lấy mẫu ~4 FPS, lưu frame gốc làm artifact, gắn `frame_number` + `timestamp_ms` thật |
+| 3 | **Phát hiện phương tiện** | Xác định có xe máy / ô tô trong khung, phân biệt với nền | **YOLOX-Tiny** (COCO) + MOG2 motion | Lọc theo class của job (xe máy=3, ô tô=2); `FixedCameraMotionDetector` (MOG2) bổ sung ứng viên chuyển động khi detector bỏ sót — nhưng chỉ là *candidate*, không tự kết luận |
+| 4 | **Tracking từng lượt xe** | Gom các frame của cùng một lượt xe thành một track, không tách/nhập nhầm | `GreedyVehicleTracker` (IoU association) | Nối detection qua các frame theo overlap; mỗi track = một lượt xe (`VEHICLE_0000xx`) |
+| 5 | **Phát hiện biển** | Khoanh vùng biển trong khung xe | **YOLOv9-T-512** (open-image-models) | Detect biển trên frame; hỗ trợ đổi tên lớp giữa các version open-image-models 0.6.0 |
+| 6 | **OCR nhiều frame** | Đọc ký tự biển; biển bẩn/mờ/chói làm mất nét phân biệt (2↔7, 3↔9, D↔U) | **CCT-XS-v2** (fast-plate-ocr), CLAHE, unsharp | **Dual-OCR**: đọc cả ảnh gốc và ảnh tăng cường (upscale ×2 + CLAHE + unsharp), giữ bản tự tin hơn; khi hai bản đọc giống nhau thì **hợp nhất lấy độ tự tin ký tự thấp nhất** để lộ ký tự nghi ngờ |
+| 7 | **Sửa ngữ pháp + bỏ phiếu** | Biển VN có cấu trúc cố định; đọc lẻ từng frame dễ sai 1–2 ký tự | `coerce_to_plate_grammar`, `plate_key`, `vote_plate` | Ép về ngữ pháp biển VN (Z→2 xuyên lớp…), rồi **bỏ phiếu theo từng vị trí ký tự** qua nhiều frame để chọn chuỗi ổn định nhất |
+| 8 | **Chọn frame biển rõ nhất** | Frame sớm mờ có thể "thắng" phiếu trong khi có frame sau nét hơn để hiển thị | `plate_quality_score` (Laplacian focus + resolution + contrast + phạt chói) | Chọn crop rõ nhất trên **toàn bộ** frame đọc được, có phạt vùng chói màu (max-channel ≥245), để reviewer thấy bằng chứng sắc nét nhất |
+| 9 | **Gom trùng** | Một biển chỉ được xuất **một** lần/job; một xe bị đọc thành 2 biển khác nhau gây thừa | `consolidate_vehicle_events`, dedup lúc đọc (`_merge_persisted_motion_candidates`) | Gom theo biển đã chuẩn hóa; suppress mảnh biển trùng/che phủ ngắn, card false-positive, mảnh unreadable cạnh biển rõ; frame tốt hơn thay crop nhưng **không tạo dòng mới** |
+| 10 | **Lưu trữ** | Giữ đủ bằng chứng để kiểm duyệt và xuất | PostgreSQL + SQLAlchemy, artifact store | Ghi `tracks`, `detections`, `recognition_results`, `artifacts`; `quality_flags` (gồm `WEAK_CHARACTER`, `SINGLE_READING_OCR`…) lưu trong `raw_output` |
+| 11 | **Kiểm duyệt (người)** | Model không phải GT — người phải xác nhận/sửa; case rủi ro phải được cảnh báo | React + TypeScript (Vite), Caddy gateway | Tab **"Cần xem lại"** gộp LOW_CONFIDENCE/UNREADABLE/NO_PLATE + `WEAK_CHARACTER`; banner cảnh báo "đọc SAI dù % cao"; timeline video tô cam đoạn cần soi; **Tự duyệt ≥ ngưỡng** loại các case rủi ro (weak-char, 1 frame, crop kém) |
+| 12 | **Xuất Excel/CSV** | Bàn giao GT mở được bằng Excel, mọi dòng có bằng chứng | endpoint CSV kỹ thuật 20 cột | `GET /api/v1/jobs/{job_id}/export.csv`; hợp đồng XLSX `Plate Report` 9 cột (kèm ảnh crop) mô tả ở [`docs/18`](docs/18-lane9-gt-export-contract.md) — chưa bật nút cho tới khi implement đủ |
+
+### Vòng lặp cải thiện OCR (fine-tune)
+
+Các case sai nhất quán ở **mọi** frame (che vật lý, chói nặng) không sửa được bằng best-frame hay
+tăng cường ảnh → cần **train**. Quy trình:
+
+1. `backend/scripts/export_ocr_from_qa.py` dựng dataset sạch từ các workbook QA + video: đọc nhãn
+   người (`Biển số đúng`) trong đúng cửa sổ thời gian, **lọc theo edit-distance** để loại nhãn
+   nhiễu, **oversample case khó** theo cột `Phân loại` (chói/che/mờ/xước…), tách train/val theo
+   *cả biển* (không rò rỉ).
+2. Fine-tune CCT-XS-v2 trên Colab GPU (`docs/colab_finetune_vn_ocr.ipynb`), export ONNX.
+3. Thay `models/plate-ocr/model.onnx`, giữ backup baseline/v2/v3.
+
+Kết quả đo trên held-out val: baseline 89.3% → v2 90.3% → v3 91.9% (CER 2.46 → 1.67 → 1.38).
+
+---
+
 # 2. Quick Start
 
 Phần này giúp dev clone repository, setup môi trường và chạy được toàn bộ codebase.
 
-> **Trạng thái triển khai hiện tại:** vertical slice MVP đã chạy end-to-end cho video xe máy:
-> upload/probe, evidence 4 FPS, detector xe/biển, OCR, tracking/vote, PostgreSQL, API kết quả và
-> Excel-compatible CSV. Review hiện là read-only; xác nhận/sửa GT Final và authentication vẫn là
-> phần tiếp theo. Hướng dẫn đang chạy thực tế nằm tại `docs/00-getting-started.md`.
+> **Trạng thái triển khai hiện tại:** MVP đã chạy end-to-end cho video xe máy **và ô tô con**:
+> (tùy chọn) cắt video, upload/probe, evidence 4 FPS, detector xe/biển, OCR + tăng cường ảnh +
+> voting theo ký tự, best-frame, gom trùng, PostgreSQL, API kết quả và CSV mở được bằng Excel.
+> **Review đã tương tác**: xác nhận / sửa GT / loại (discard) / bổ sung case bỏ sót, tự duyệt theo
+> ngưỡng với các chốt an toàn (loại case `WEAK_CHARACTER` / 1-frame / crop kém), và cơ chế
+> "Cần xem lại" cho biển che vật lý. Vòng lặp fine-tune OCR đã có (script export dataset + Colab).
+> Authentication đầy đủ và nút XLSX `Plate Report` là phần tiếp theo. Hướng dẫn đang chạy thực tế
+> nằm tại `docs/00-getting-started.md`.
 
 ## 2.1. Yêu cầu hệ thống
 
@@ -1047,12 +1119,12 @@ Các action:
 
 ### Video
 
-- OpenCV.
-- FFmpeg.
-- NumPy.
-- Pillow.
+- OpenCV (decode/sampling).
+- **PyAV (libav) + libx264** — cắt/ghép video condensation, không cần ffmpeg CLI.
+- MOG2 (`FixedCameraMotionDetector`) — phát hiện chuyển động camera cố định.
+- NumPy, Pillow.
 
-### Face
+### Face *(giai đoạn sau)*
 
 - InsightFace.
 - SCRFD hoặc RetinaFace.
@@ -1061,12 +1133,16 @@ Các action:
 - Cosine Similarity.
 - FAISS hoặc pgvector khi gallery lớn.
 
-### Plate
+### Plate *(đang chạy)*
 
-- YOLO Plate Detector.
-- LPR model nội bộ.
-- PaddleOCR hoặc OCR hiện có.
-- Multi-frame Voting.
+- **YOLOX-Tiny** (COCO) — phát hiện phương tiện (xe máy class 3, ô tô class 2).
+- **YOLOv9-T-512** (open-image-models) — phát hiện biển.
+- **CCT-XS-v2** (fast-plate-ocr, ONNX) — OCR biển; alphabet `0-9 A-Z _`.
+- **CLAHE + unsharp + dual-OCR** — cứu biển bẩn/mờ/chói.
+- **Grammar repair + per-character voting** — chuẩn hóa biển VN, chọn chuỗi ổn định qua nhiều frame.
+- **Quality score** (Laplacian focus + resolution + contrast + phạt chói) — chọn best-frame.
+- **Min per-character confidence** → cờ `WEAK_CHARACTER` cho biển che vật lý / chói.
+- Fine-tune CCT-XS-v2 (fast-plate-ocr[train]) trên Colab GPU — xem `docs/19`.
 
 ## 10.6. Export
 
@@ -2719,28 +2795,19 @@ PR cần có:
 
 # 30. Tài liệu chi tiết
 
-Đọc theo thứ tự:
+Đọc theo thứ tự (các tài liệu **hiện có** trong repo):
 
-1. `README.md`
-2. `AGENTS.md` hoặc `CLAUDE.md`
-3. `docs/00-getting-started.md`
-4. `docs/01-product-overview.md`
-5. `docs/02-mvp-scope.md`
-6. `docs/03-functional-specification.md`
-7. `docs/04-system-architecture.md`
-8. `docs/05-database-schema.md`
-9. `docs/06-face-pipeline.md`
-10. `docs/07-plate-pipeline.md`
-11. `docs/08-tracking-deduplication.md`
-12. `docs/09-api-specification.md`
-13. `docs/10-frontend-specification.md`
-14. `docs/11-excel-output.md`
-15. `docs/12-test-plan.md`
-16. `docs/13-security-and-data.md`
-17. `docs/14-deployment-guide.md`
-18. `docs/15-user-guide.md`
-19. `docs/16-sprint-plan.md`
-20. `docs/17-known-limitations.md`
+1. `README.md` — tổng quan, luồng, công nghệ, quick start.
+2. `CLAUDE.md` — working contract, nguyên tắc bất di bất dịch.
+3. `docs/00-getting-started.md` — dựng và chạy hệ thống.
+4. `docs/05-database-schema.md` — cấu trúc bảng nguồn sự thật.
+5. `docs/14-deployment-guide.md` — deploy.
+6. `docs/15-evidence-and-benchmark.md` — evidence + đo chất lượng.
+7. `docs/16-motorcycle-alpr-mvp.md` — chi tiết kỹ thuật pipeline biển số.
+8. `docs/17-ui-field-audit.md` — rà soát field trên UI.
+9. `docs/18-lane9-gt-export-contract.md` — hợp đồng GT Lane 9 + Excel `Plate Report` 9 cột.
+10. `docs/19-ocr-finetune-guide.md` — hướng dẫn fine-tune OCR.
+11. `docs/colab_finetune_vn_ocr.ipynb` — notebook Colab train OCR.
 
 ---
 
@@ -2750,12 +2817,11 @@ Trước khi viết code, coding agent phải đọc:
 
 ```text
 1. README.md
-2. AGENTS.md hoặc CLAUDE.md
+2. CLAUDE.md
 3. docs/00-getting-started.md
-4. docs/02-mvp-scope.md
-5. docs/04-system-architecture.md
-6. docs/05-database-schema.md
-7. docs/16-sprint-plan.md
+4. docs/16-motorcycle-alpr-mvp.md
+5. docs/05-database-schema.md
+6. docs/18-lane9-gt-export-contract.md
 ```
 
 Không tự ý triển khai toàn bộ dự án cùng lúc.
@@ -2944,20 +3010,36 @@ Kiểm tra:
 Trạng thái:
 
 ```text
-Prototype / MVP Development
+MVP đang hoàn thiện — pipeline motorcycle-alpr-v4 chạy end-to-end (xe máy + ô tô con)
 ```
 
-Ưu tiên hiện tại:
+**Đã xong (đang chạy thật):**
 
 ```text
 Setup Codebase
-→ Evidence Pipeline
-→ Plate Detection
-→ Excel Baseline
-→ Tracking
-→ Plate OCR và multi-frame voting
-→ Review Workspace
-→ GT Final Export
+→ Evidence Pipeline (4 FPS, frame + timestamp thật)
+→ Vehicle Detection (YOLOX-Tiny xe máy/ô tô + MOG2 motion)
+→ Tracking (GreedyVehicleTracker)
+→ Plate Detection (YOLOv9-T-512)
+→ Plate OCR (CCT-XS-v2) + tăng cường ảnh + dual-OCR
+→ Grammar repair + per-char voting
+→ Best-frame selection (quality score + phạt chói)
+→ Duplicate consolidation
+→ PostgreSQL + artifact bằng chứng
+→ Cắt video (PyAV/x264): bỏ đoạn không có xe, đẩy sang GT
+→ Review Workspace tương tác: xác nhận/sửa/loại/bổ sung
+→ Cơ chế kiểm soát đọc sai: WEAK_CHARACTER, "Cần xem lại", tự duyệt có chốt an toàn
+→ Fine-tune OCR loop (export dataset từ QA + Colab): baseline 89.3% → v3 91.9%
+→ CSV mở được bằng Excel (20 cột kỹ thuật)
+```
+
+**Đang làm / tiếp theo:**
+
+```text
+→ Authentication đầy đủ (RBAC)
+→ Xuất XLSX "Plate Report" 9 cột kèm ảnh crop (theo docs/18)
+→ Mở rộng train case che vật lý (round tiếp theo)
+→ Pipeline khuôn mặt (giai đoạn sau)
 ```
 
 ---

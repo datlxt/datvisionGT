@@ -48,9 +48,11 @@ function SelectionCard({
 }
 
 export function CreateJobPage({
+  initialVehicleType = "motorcycle",
   onDraftSaved,
   onStarted,
 }: {
+  initialVehicleType?: "motorcycle" | "car";
   onDraftSaved: (job: Job) => void;
   onStarted: (job: Job) => void;
 }) {
@@ -60,7 +62,7 @@ export function CreateJobPage({
   const [draft, setDraft] = useState<Job | null>(null);
   const [busyAction, setBusyAction] = useState<"draft" | "start" | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [vehicleType, setVehicleType] = useState<"motorcycle" | "car">("motorcycle");
+  const [vehicleType, setVehicleType] = useState<"motorcycle" | "car">(initialVehicleType);
   const [message, setMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
 
   useEffect(
