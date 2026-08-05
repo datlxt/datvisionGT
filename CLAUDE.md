@@ -11,6 +11,10 @@ in [`docs/18-lane9-gt-export-contract.md`](docs/18-lane9-gt-export-contract.md).
 - Pipeline: YOLOX-Tiny vehicle detection, YOLOv9-T plate detection, multi-frame CCT OCR, tracking,
   best-frame selection, duplicate consolidation, PostgreSQL persistence.
 - Runtime: offline ONNX Runtime CPU. No external AI API is called during video processing.
+- Optional cloud OCR cross-check: an opt-in review-stage step (`POST /jobs/{id}/cross-check`) may
+  send plate crops to a cloud vision model as an independent SECOND reader. It runs only after
+  processing, never inside the offline worker, is disabled unless `CLOUD_OCR_ENABLED` + an API key
+  are set, and never writes GT — a disagreement only flags the case (`OCR_DISAGREEMENT`) for a human.
 - Current pipeline identifier: `motorcycle-alpr-v4`.
 
 ## Non-negotiable rules

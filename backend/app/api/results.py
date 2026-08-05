@@ -29,6 +29,7 @@ from app.models import (
     RecognitionResult,
     Track,
 )
+from app.workers.cross_check import run_cross_check
 
 _XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -57,6 +58,11 @@ class EventResult(BaseModel):
     full_frame_url: str
     vehicle_crop_url: str
     plate_crop_url: str | None
+    # Second-opinion reads from the cloud cross-check (None until it has been run).
+    cloud_plate: str | None = None  # GPT
+    cloud_quality: str | None = None
+    qwen_plate: str | None = None
+    qwen_quality: str | None = None
 
 
 class ResultList(BaseModel):
@@ -496,6 +502,10 @@ def _load_results(job_id: uuid.UUID, session: Session) -> tuple[ProcessingJob, l
                 plate_detection_count=int(raw.get("plate_detection_count", 0)),
                 quality_score=selected.quality_score,
                 quality_flags=list(raw.get("quality_flags", [])),
+                cloud_plate=raw.get("cloud_plate"),
+                cloud_quality=raw.get("cloud_quality"),
+                qwen_plate=raw.get("qwen_plate"),
+                qwen_quality=raw.get("qwen_quality"),
                 full_frame_url=_artifact_url(job.id, full_frame),
                 vehicle_crop_url=_artifact_url(job.id, vehicle_crop),
                 plate_crop_url=_artifact_url(job.id, plate_crop) if plate_crop else None,
@@ -686,6 +696,43 @@ def export_results_xlsx(
         iter([payload]),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+class CrossCheckSummary(BaseModel):
+    checked: int
+    agree: int
+    disagree: int
+    unverified: int
+
+
+@router.post("/{job_id}/cross-check", response_model=CrossCheckSummary)
+def cross_check_ocr(
+    job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)]
+) -> CrossCheckSummary:
+    """Second, independent OCR pass over every plate via the cloud model.
+
+    For each plate the cloud read is compared with the local model's read; agreement raises
+    trust, disagreement flags the case (OCR_DISAGREEMENT) so it lands in "Cần xem lại" with both
+    answers shown. Kept OUT of the offline worker — this is an explicit, opt-in review step.
+    """
+
+    settings = get_settings()
+    if not settings.cloud_ocr_available:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Cloud OCR chưa bật hoặc thiếu OPENAI_API_KEY.",
+        )
+    job = session.get(ProcessingJob, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+
+    agree, disagree, unverified = run_cross_check(session, job, settings)
+    return CrossCheckSummary(
+        checked=agree + disagree + unverified,
+        agree=agree,
+        disagree=disagree,
+        unverified=unverified,
     )
 
 

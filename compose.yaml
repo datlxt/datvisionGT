@@ -48,6 +48,14 @@ services:
       STORAGE_ROOT: ${STORAGE_ROOT:-/app/storage}
       MODEL_ROOT: ${MODEL_ROOT:-/app/models}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      CLOUD_OCR_ENABLED: ${CLOUD_OCR_ENABLED:-false}
+      CLOUD_OCR_TIMEOUT_S: ${CLOUD_OCR_TIMEOUT_S:-30}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_OCR_MODEL: ${OPENAI_OCR_MODEL:-gpt-5.4-mini}
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
+      QWEN_OCR_MODEL: ${QWEN_OCR_MODEL:-qwen-vl-max}
     volumes:
       - ${DATA_ROOT:-./storage}:/app/storage
       - ${MODEL_DATA_ROOT:-./models}:/app/models:ro

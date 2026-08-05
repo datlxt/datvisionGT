@@ -34,6 +34,34 @@ class Settings(BaseSettings):
     min_no_plate_observations: int = 5
     min_recognized_readings: int = 2
 
+    # Cloud OCR cross-check (a SECOND, independent reader for every plate). Runs as a separate
+    # post-processing step — never inside the offline video worker — so the core pipeline stays
+    # deterministic and offline. Disabled until an API key is provided.
+    cloud_ocr_enabled: bool = False
+    cloud_ocr_timeout_s: float = 30.0
+    # Reader A — OpenAI (GPT).
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_ocr_model: str = "gpt-5.6-terra"  # vision-capable model id; override via env if needed
+    # Reader B — Qwen (Alibaba DashScope, OpenAI-compatible endpoint). A DIFFERENT vendor keeps
+    # the two AI readers independent, so agreement is meaningful and disagreement is a real signal.
+    qwen_api_key: str = ""
+    qwen_base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    qwen_ocr_model: str = "qwen-vl-max"
+
+    @property
+    def cloud_ocr_available(self) -> bool:
+        # The feature is on as long as it is enabled and at least ONE reader has a key.
+        return self.cloud_ocr_enabled and bool(self.openai_api_key or self.qwen_api_key)
+
+    @property
+    def openai_available(self) -> bool:
+        return self.cloud_ocr_enabled and bool(self.openai_api_key)
+
+    @property
+    def qwen_available(self) -> bool:
+        return self.cloud_ocr_enabled and bool(self.qwen_api_key)
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

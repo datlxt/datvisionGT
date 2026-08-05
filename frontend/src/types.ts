@@ -75,6 +75,10 @@ export type EventResult = {
   full_frame_url: string;
   vehicle_crop_url: string;
   plate_crop_url: string | null;
+  cloud_plate?: string | null;
+  cloud_quality?: string | null;
+  qwen_plate?: string | null;
+  qwen_quality?: string | null;
 };
 
 export type ResultList = {

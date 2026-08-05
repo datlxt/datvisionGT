@@ -111,13 +111,94 @@ function classificationTone(event: EventResult) {
 // missed plate). All of these land together in the yellow "Cần xem lại" bucket, on the tab, and
 // on the video timeline — regardless of the % score.
 function isRiskyRead(event: EventResult): boolean {
+  // Only a UNANIMOUS cross-check (every reader read the same plate) clears the local per-character
+  // doubt. A mere 2/3 majority on a hard plate can be two readers making the SAME wrong read
+  // (89M1… misread as 89H… by local+AI-2 while AI-1 dissented) — so a dissenter keeps it risky.
+  const confirmed = event.quality_flags.includes("OCR_UNANIMOUS");
   return (
     event.classification === "LOW_CONFIDENCE" ||
     event.classification === "UNREADABLE" ||
     event.classification === "NO_PLATE" ||
-    event.quality_flags.includes("WEAK_CHARACTER") ||
-    event.quality_flags.includes("SINGLE_READING_OCR") ||
+    (!confirmed && event.quality_flags.includes("WEAK_CHARACTER")) ||
+    (!confirmed && event.quality_flags.includes("SINGLE_READING_OCR")) ||
+    // Readers split (no majority) OR a 2/3 majority with a dissenting reader — either way not
+    // everyone agreed, so a human must decide (dissent on a hard plate = likely a wrong read).
+    event.quality_flags.includes("OCR_DISAGREEMENT") ||
+    (event.quality_flags.includes("OCR_AGREE") && !confirmed) ||
     (event.quality_score ?? 1) < 0.5
+  );
+}
+
+// Turn the internal engine flags into plain Vietnamese the reviewer can act on. Flags not in
+// this map (dedup / motion bookkeeping) are hidden — they are noise for a human reviewer.
+const FLAG_META: Record<string, { label: string; tone: "warn" | "info" | "ok" }> = {
+  WEAK_CHARACTER: { label: "Ký tự bị che / chói", tone: "warn" },
+  SINGLE_READING_OCR: { label: "Chỉ đọc được 1 khung hình", tone: "warn" },
+  OCR_DISAGREEMENT: { label: "AI đọc lệch model", tone: "warn" },
+  QUALITY_DISAGREEMENT: { label: "Phân loại chưa chắc", tone: "warn" },
+  OCR_UNVERIFIED: { label: "Chưa kiểm chéo được", tone: "info" },
+  OCR_AGREE: { label: "AI khớp model", tone: "ok" },
+  QUALITY_AGREE: { label: "Phân loại khớp", tone: "ok" },
+};
+
+function friendlyFlags(flags: string[]) {
+  // Only a UNANIMOUS cross-check resolves the local doubt; hide the alarming chips only then.
+  const confirmed = flags.includes("OCR_UNANIMOUS");
+  const hidden = confirmed
+    ? new Set(["WEAK_CHARACTER", "SINGLE_READING_OCR", "QUALITY_DISAGREEMENT"])
+    : new Set<string>();
+  return flags
+    .filter((flag) => flag in FLAG_META && !hidden.has(flag))
+    .map((flag) => ({ flag, ...FLAG_META[flag] }));
+}
+
+// The consensus card: shows the local model + the two AI readers side by side with one clear
+// verdict, so a first-time reviewer instantly sees whether to trust the read or look closer.
+function CrossCheckCard({ event }: { event: EventResult }) {
+  const ran = event.cloud_plate != null || event.qwen_plate != null;
+  const unverified = event.quality_flags.includes("OCR_UNVERIFIED");
+  if (!ran && !unverified) return null;
+
+  const rows = [
+    { name: "Model (máy)", value: event.normalized_plate || event.raw_plate || "—" },
+    { name: "AI-1", value: event.cloud_plate },
+    { name: "AI-2", value: event.qwen_plate },
+  ].filter((row) => row.value != null);
+
+  const disagree = event.quality_flags.includes("OCR_DISAGREEMENT");
+  const unanimous = event.quality_flags.includes("OCR_UNANIMOUS");
+  const agree = event.quality_flags.includes("OCR_AGREE");
+  const verdict = unverified
+    ? { cls: "info", icon: "clock" as const, text: "Chưa kiểm chéo được (mạng / AI lỗi) — thử lại sau." }
+    : disagree
+      ? { cls: "diff", icon: "alert" as const, text: "Các nguồn đọc KHÁC nhau — nhìn kỹ crop rồi chọn biển đúng." }
+      : unanimous
+        ? { cls: "same", icon: "check" as const, text: "Cả 3 nguồn cùng đọc một biển — đáng tin." }
+        : agree
+          ? {
+              cls: "diff",
+              icon: "alert" as const,
+              text: "Đa số đọc giống nhưng CÓ nguồn khác — biển khó, soi kỹ crop trước khi tin.",
+            }
+          : { cls: "info", icon: "eye" as const, text: "Đã đối chiếu AI." };
+
+  return (
+    <div className={`crosscheck crosscheck-${verdict.cls}`}>
+      <div className="crosscheck-title">
+        <Icon name="shield" size={15} /> Đối chiếu AI (đọc lại biển)
+      </div>
+      <div className="crosscheck-rows">
+        {rows.map((row) => (
+          <div className="crosscheck-row" key={row.name}>
+            <span>{row.name}</span>
+            <strong>{row.value || "không đọc được"}</strong>
+          </div>
+        ))}
+      </div>
+      <div className="crosscheck-verdict">
+        <Icon name={verdict.icon} size={15} /> {verdict.text}
+      </div>
+    </div>
   );
 }
 
@@ -140,6 +221,14 @@ export function ReviewPage({ job }: { job: Job }) {
   const [autoThreshold, setAutoThreshold] = useState(95);
   const [autoBusy, setAutoBusy] = useState(false);
   const [autoResult, setAutoResult] = useState<number | null>(null);
+  const [crossBusy, setCrossBusy] = useState(false);
+  const [crossResult, setCrossResult] = useState<{
+    checked: number;
+    agree: number;
+    disagree: number;
+    unverified: number;
+    error?: string;
+  } | null>(null);
   const [videoMs, setVideoMs] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [showMissed, setShowMissed] = useState(false);
@@ -259,6 +348,28 @@ export function ReviewPage({ job }: { job: Job }) {
       .finally(() => setAutoBusy(false));
   }
 
+  function runCrossCheck() {
+    setCrossBusy(true);
+    api<{ checked: number; agree: number; disagree: number; unverified: number }>(
+      `/api/v1/jobs/${job.id}/cross-check`,
+      { method: "POST" },
+    )
+      .then((r) => {
+        setReloadToken((value) => value + 1);
+        setCrossResult(r);
+      })
+      .catch((reason: unknown) =>
+        setCrossResult({
+          checked: 0,
+          agree: 0,
+          disagree: 0,
+          unverified: 0,
+          error: reason instanceof Error ? reason.message : "Không kiểm chéo được.",
+        }),
+      )
+      .finally(() => setCrossBusy(false));
+  }
+
   const selected =
     results?.events.find((event) => event.track_id === selectedId) ??
     filteredEvents[0] ??
@@ -334,6 +445,15 @@ export function ReviewPage({ job }: { job: Job }) {
             <Icon name="check" size={16} /> {autoBusy ? "Đang duyệt…" : "Tự duyệt"}
           </button>
         </div>
+        <button
+          className="button button-blue button-compact"
+          disabled={crossBusy}
+          onClick={runCrossCheck}
+          title="Đọc lại mọi biển bằng 2 model AI (cloud) so với model local; biển 3 nguồn không khớp sẽ vào 'Cần xem lại'."
+          type="button"
+        >
+          <Icon name="refresh" size={16} /> {crossBusy ? "Đang kiểm chéo…" : "Kiểm chéo AI"}
+        </button>
         <div className="review-actions-spacer" />
         <button
           className="button button-secondary button-compact"
@@ -647,10 +767,13 @@ export function ReviewPage({ job }: { job: Job }) {
                   <dd>{confidence(selected.quality_score)}</dd>
                 </div>
               </dl>
-              {selected.quality_flags.length > 0 && (
+              <CrossCheckCard event={selected} />
+              {friendlyFlags(selected.quality_flags).length > 0 && (
                 <div className="quality-flags">
-                  {selected.quality_flags.map((flag) => (
-                    <span key={flag}>{flag}</span>
+                  {friendlyFlags(selected.quality_flags).map(({ flag, label, tone }) => (
+                    <span className={`qflag qflag-${tone}`} key={flag}>
+                      {label}
+                    </span>
                   ))}
                 </div>
               )}
@@ -681,8 +804,14 @@ export function ReviewPage({ job }: { job: Job }) {
 
             <GtPanel
               key={selected.track_id}
-              record={selectedGt}
+              cloudQuality={selected.cloud_quality}
+              qwenQuality={selected.qwen_quality}
               onChanged={() => setGtReload((value) => value + 1)}
+              qualityDisagree={
+                selected.quality_flags.includes("QUALITY_DISAGREEMENT") &&
+                !selected.quality_flags.includes("OCR_AGREE")
+              }
+              record={selectedGt}
             />
 
             <footer className="review-navigation">
@@ -762,6 +891,75 @@ export function ReviewPage({ job }: { job: Job }) {
         </div>
       )}
 
+      {crossResult !== null && (
+        <div className="modal-overlay" onClick={() => setCrossResult(null)} role="presentation">
+          <div
+            aria-label="Kết quả kiểm chéo AI"
+            aria-modal="true"
+            className="modal-card modal-card-wide"
+            onClick={(event) => event.stopPropagation()}
+            role="alertdialog"
+          >
+            <span
+              className={`modal-icon ${
+                crossResult.error ? "modal-icon-danger" : "modal-icon-blue"
+              }`}
+            >
+              <Icon name={crossResult.error ? "alert" : "shield"} size={26} />
+            </span>
+            <h3>{crossResult.error ? "Kiểm chéo AI thất bại" : "Kết quả kiểm chéo AI"}</h3>
+            {crossResult.error ? (
+              <p>{crossResult.error}</p>
+            ) : (
+              <>
+                <p>
+                  Đọc lại <strong>{crossResult.checked}</strong> biển bằng <strong>2 model AI
+                  (cloud)</strong> rồi so với <strong>model local</strong>. Ba nguồn cùng đọc thì
+                  tin; khác nhau thì cần bạn xem.
+                </p>
+                <div className="cross-stats">
+                  <div className="cross-stat cross-stat-ok">
+                    <strong>{crossResult.agree}</strong>
+                    <span>Khớp — 3 nguồn giống nhau, đáng tin</span>
+                  </div>
+                  <div className="cross-stat cross-stat-diff">
+                    <strong>{crossResult.disagree}</strong>
+                    <span>Khác — có bất đồng, đã đưa vào &quot;Cần xem lại&quot;</span>
+                  </div>
+                  {crossResult.unverified > 0 && (
+                    <div className="cross-stat cross-stat-muted">
+                      <strong>{crossResult.unverified}</strong>
+                      <span>Chưa kiểm được (mạng/AI lỗi) — thử lại sau</span>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+            <div className="modal-actions">
+              <button
+                className="button button-secondary"
+                onClick={() => setCrossResult(null)}
+                type="button"
+              >
+                Đóng
+              </button>
+              {!crossResult.error && crossResult.disagree > 0 && (
+                <button
+                  className="button button-blue"
+                  onClick={() => {
+                    setFilter("REVIEW");
+                    setCrossResult(null);
+                  }}
+                  type="button"
+                >
+                  Xem “Cần xem lại” ({crossResult.disagree})
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {showMissed && (
         <MissedCaseDialog
           defaultTimestamp={toClock(
@@ -784,13 +982,23 @@ export function ReviewPage({ job }: { job: Job }) {
 function GtPanel({
   record,
   onChanged,
+  cloudQuality,
+  qwenQuality,
+  qualityDisagree,
 }: {
   record: GroundTruthRecord | null;
   onChanged: () => void;
+  cloudQuality?: string | null;
+  qwenQuality?: string | null;
+  qualityDisagree?: boolean;
 }) {
   const [gtText, setGtText] = useState(record?.gt_text ?? record?.predicted_text ?? "");
   const [note, setNote] = useState(record?.note ?? "");
-  const [quality, setQuality] = useState(record?.classification ?? "");
+  // Prefill the category with the AI + local-signal agreed label (when the reviewer hasn't set
+  // one and the two evaluators did NOT disagree); the reviewer can still change it.
+  const [quality, setQuality] = useState(
+    record?.classification ?? (qualityDisagree ? "" : cloudQuality ?? ""),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -862,6 +1070,22 @@ function GtPanel({
           ))}
         </select>
       </label>
+      {cloudQuality ? (
+        <p className={qualityDisagree ? "quality-hint quality-hint-diff" : "quality-hint"}>
+          {qualityDisagree ? (
+            qwenQuality && qwenQuality !== cloudQuality ? (
+              <>
+                ⚠ 2 AI phân loại KHÁC nhau — AI-1: <strong>{cloudQuality}</strong> · AI-2:{" "}
+                <strong>{qwenQuality}</strong>. Bạn nhìn crop chọn giúp.
+              </>
+            ) : (
+              `⚠ AI phân loại "${cloudQuality}" nhưng lệch với tín hiệu ảnh — bạn chọn giúp.`
+            )
+          ) : (
+            `AI + tín hiệu ảnh cùng đề xuất: "${cloudQuality}" (đã điền sẵn, sửa nếu cần).`
+          )}
+        </p>
+      ) : null}
       <label>
         Ghi chú kiểm duyệt
         <textarea

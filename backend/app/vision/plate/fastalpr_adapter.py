@@ -185,6 +185,22 @@ def crop_bgr(frame: NDArray[np.uint8], bbox: tuple[int, int, int, int]) -> NDArr
     return frame[y1:y2, x1:x2]
 
 
+def pad_bbox(
+    bbox: tuple[int, int, int, int], shape: tuple[int, ...], fraction: float = 0.12
+) -> tuple[int, int, int, int]:
+    """Grow a plate box by ``fraction`` of its size (clamped to the frame).
+
+    Detector boxes are often tight and clip the edge characters; a small margin keeps the whole
+    plate plus a little context, which reads better for both the OCR and the AI cross-check.
+    """
+
+    height, width = shape[:2]
+    x1, y1, x2, y2 = bbox
+    dx = int(round((x2 - x1) * fraction))
+    dy = int(round((y2 - y1) * fraction))
+    return (max(0, x1 - dx), max(0, y1 - dy), min(width, x2 + dx), min(height, y2 + dy))
+
+
 def plate_quality_score(image: NDArray[np.uint8]) -> float:
     """Rank plate crops so best-frame selection picks the most READABLE plate.
 

@@ -454,6 +454,8 @@ def auto_verify_ground_truth(
             # 96%). Keep those for a human instead of auto-verifying them.
             or "SINGLE_READING_OCR" in event.quality_flags
             or "WEAK_CHARACTER" in event.quality_flags
+            # The second (cloud) reader disagreed — two models can't agree, so a human decides.
+            or "OCR_DISAGREEMENT" in event.quality_flags
             or (event.quality_score is not None and event.quality_score < 0.55)
         ):
             continue

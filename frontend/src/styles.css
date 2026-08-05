@@ -1065,6 +1065,67 @@ code {
   overflow-x: auto;
 }
 
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 22px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.pagination-info {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pagination-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.pagination-btn:hover:not(:disabled) {
+  border-color: var(--blue);
+  background: var(--blue-light);
+  color: var(--blue);
+}
+
+.pagination-btn:disabled {
+  color: #b8c4cf;
+  cursor: not-allowed;
+}
+
+.pagination-flip {
+  display: inline-flex;
+  transform: rotate(180deg);
+}
+
+.pagination-page {
+  min-width: 96px;
+  text-align: center;
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -1486,6 +1547,66 @@ code {
 .modal-icon-success {
   background: #dcfce7;
   color: #16a34a;
+}
+
+.modal-icon-blue {
+  background: #e4effd;
+  color: var(--blue);
+}
+
+.modal-card-wide {
+  width: min(500px, 100%);
+}
+
+/* Cross-check result breakdown (khớp / khác / lỗi) */
+.cross-stats {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 22px;
+  text-align: left;
+}
+
+.cross-stat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+.cross-stat strong {
+  min-width: 34px;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.cross-stat span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.cross-stat-ok {
+  background: #f3fbf5;
+  border-color: #bbe7c6;
+}
+
+.cross-stat-ok strong {
+  color: #16a34a;
+}
+
+.cross-stat-diff {
+  background: #fff8f0;
+  border-color: #f4c9a0;
+}
+
+.cross-stat-diff strong {
+  color: #b45309;
+}
+
+.cross-stat-muted strong {
+  color: #64748b;
 }
 
 .modal-card h3 {
@@ -2309,12 +2430,105 @@ code {
 }
 
 .quality-flags span {
-  padding: 3px 5px;
-  border-radius: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
   background: #f4f0fb;
   color: #745ab0;
-  font-size: 6px;
+  font-size: 11px;
+  font-weight: 600;
   overflow-wrap: anywhere;
+}
+
+.qflag-warn {
+  background: #fef3e2;
+  color: #b45309;
+}
+
+.qflag-info {
+  background: #eef2f7;
+  color: #64748b;
+}
+
+.qflag-ok {
+  background: #e7f7ec;
+  color: #16a34a;
+}
+
+/* Consensus card: local model + the two AI readers + one plain verdict. */
+.crosscheck {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.crosscheck-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.crosscheck-rows {
+  display: grid;
+  gap: 4px;
+}
+
+.crosscheck-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.crosscheck-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.crosscheck-row strong {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.crosscheck-verdict {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.crosscheck-same {
+  border-color: #bbe7c6;
+  background: #f3fbf5;
+}
+
+.crosscheck-same .crosscheck-verdict {
+  color: #16a34a;
+}
+
+.crosscheck-diff {
+  border-color: #f4c9a0;
+  background: #fff8f0;
+}
+
+.crosscheck-diff .crosscheck-verdict {
+  color: #b45309;
+}
+
+.crosscheck-info .crosscheck-verdict {
+  color: #64748b;
 }
 
 .ground-truth-section {
@@ -2700,6 +2914,30 @@ code {
   border: 1px solid var(--warning);
   border-radius: 12px;
   background: #fff7ec;
+}
+
+/* Second-opinion (cloud) read shown next to the local model's read. */
+.cloud-read {
+  font-weight: 700;
+}
+
+.cloud-read-same {
+  color: #16a34a;
+}
+
+.cloud-read-diff {
+  color: #dc2626;
+}
+
+/* AI + local-signal suggestion for the plate-quality category (shown under the dropdown). */
+.quality-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #16a34a;
+}
+
+.quality-hint-diff {
+  color: #b45309;
 }
 
 .prediction-warning svg {

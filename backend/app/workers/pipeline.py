@@ -23,7 +23,7 @@ from app.models import (
     Track,
 )
 from app.vision.media.reader import sha256_file
-from app.vision.plate.fastalpr_adapter import FastAlprPlateEngine, crop_bgr
+from app.vision.plate.fastalpr_adapter import FastAlprPlateEngine, crop_bgr, pad_bbox
 from app.vision.plate.motion_vehicle import CompositeVehicleDetector, FixedCameraMotionDetector
 from app.vision.plate.pipeline import MotorcyclePlatePipeline, PipelineFrame, RearCameraConfig
 from app.vision.plate.yolox_vehicle import YoloXMotorcycleDetector
@@ -311,7 +311,7 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
                         storage_root=settings.storage_root,
                         job_id=job.id,
                         name=f"{event.track_code.lower()}_plate",
-                        bgr=crop_bgr(bgr, best.plate_bbox),
+                        bgr=crop_bgr(bgr, pad_bbox(best.plate_bbox, bgr.shape)),
                         kind="PLATE_CROP",
                         frame_number=best.frame_number,
                         timestamp_ms=best.timestamp_ms,
@@ -374,6 +374,24 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
                 )
             )
             session.commit()
+            # Kick off the cloud OCR cross-check as a SEPARATE background job so the reviewer opens
+            # the case with AI second-opinions already attached — without slowing or blocking the
+            # offline pipeline. No-op when cloud readers aren't configured; never fails the job.
+            if settings.cloud_ocr_available:
+                try:
+                    from redis import Redis
+                    from rq import Queue
+
+                    Queue(
+                        settings.rq_queue, connection=Redis.from_url(settings.redis_url)
+                    ).enqueue(
+                        "app.workers.cross_check.cross_check_job",
+                        job_id,
+                        job_timeout="1h",
+                        result_ttl=86400,
+                    )
+                except Exception:
+                    pass
             return {"job_id": job_id, "status": job.status, "event_count": len(events)}
         except Exception as exc:
             session.rollback()

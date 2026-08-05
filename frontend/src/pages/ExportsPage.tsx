@@ -1,3 +1,5 @@
+import { useEffect, useMemo, useState } from "react";
+
 import { Icon } from "../components/Icon";
 import {
   ConfirmDialog,
@@ -15,6 +17,13 @@ import {
 import { useJobDeletion } from "../lib/useJobDeletion";
 import type { Job } from "../types";
 
+type ExportFilter = "ALL" | "READY" | "PROCESSING" | "FAILED";
+const PER_PAGE = 8;
+
+function isFailed(job: Job): boolean {
+  return job.status === "FAILED" || job.status === "CANCELLED";
+}
+
 export function ExportsPage({
   jobs,
   onDelete,
@@ -26,6 +35,31 @@ export function ExportsPage({
 }) {
   const readyCount = jobs.filter(isReadyForReview).length;
   const deletion = useJobDeletion(onDelete);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<ExportFilter>("ALL");
+  const [page, setPage] = useState(1);
+
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return jobs.filter((job) => {
+      const matchesQuery =
+        !needle ||
+        job.source_name.toLowerCase().includes(needle) ||
+        job.job_code.toLowerCase().includes(needle);
+      if (!matchesQuery) return false;
+      if (filter === "READY") return isReadyForReview(job);
+      if (filter === "FAILED") return isFailed(job);
+      if (filter === "PROCESSING") return !isReadyForReview(job) && !isFailed(job);
+      return true;
+    });
+  }, [jobs, query, filter]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
+  // Keep the current page valid when the filter/search shrinks the result set.
+  useEffect(() => {
+    if (page > totalPages) setPage(1);
+  }, [page, totalPages]);
+  const pageJobs = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
   return (
     <section className="page exports-page">
@@ -47,6 +81,38 @@ export function ExportsPage({
         </div>
       </div>
 
+      {jobs.length > 0 && (
+        <div className="review-toolbar card">
+          <label>
+            <Icon name="search" size={18} />
+            <input
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Tìm tên job hoặc mã job…"
+              value={query}
+            />
+          </label>
+          <div className="filter-tabs">
+            {(
+              [
+                ["ALL", "Tất cả", jobs.length],
+                ["READY", "Sẵn sàng", readyCount],
+                ["PROCESSING", "Đang xử lý", jobs.filter((j) => !isReadyForReview(j) && !isFailed(j)).length],
+                ["FAILED", "Lỗi", jobs.filter(isFailed).length],
+              ] as [ExportFilter, string, number][]
+            ).map(([value, label, count]) => (
+              <button
+                className={filter === value ? "active" : ""}
+                key={value}
+                onClick={() => setFilter(value)}
+                type="button"
+              >
+                {label} <span>{count}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <section className="card table-card">
         <header>
           <div>
@@ -58,6 +124,11 @@ export function ExportsPage({
           <EmptyState
             description="Kết quả sẽ xuất hiện sau khi một job được tạo."
             title="Chưa có kết quả"
+          />
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            description="Thử đổi bộ lọc hoặc từ khóa tìm kiếm khác."
+            title="Không có job khớp"
           />
         ) : (
           <div className="data-table-wrap">
@@ -74,7 +145,7 @@ export function ExportsPage({
                 </tr>
               </thead>
               <tbody>
-                {jobs.map((job) => (
+                {pageJobs.map((job) => (
                   <tr key={job.id}>
                     <td>
                       <button className="table-link" onClick={() => onOpen(job)} type="button">
@@ -149,6 +220,39 @@ export function ExportsPage({
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        {filtered.length > PER_PAGE && (
+          <div className="pagination">
+            <span className="pagination-info">
+              {(page - 1) * PER_PAGE + 1}–{Math.min(page * PER_PAGE, filtered.length)} /{" "}
+              {filtered.length} job
+            </span>
+            <div className="pagination-controls">
+              <button
+                className="pagination-btn"
+                disabled={page <= 1}
+                onClick={() => setPage((value) => Math.max(1, value - 1))}
+                type="button"
+              >
+                <span className="pagination-flip">
+                  <Icon name="arrow" size={15} />
+                </span>
+                Trước
+              </button>
+              <span className="pagination-page">
+                Trang {page} / {totalPages}
+              </span>
+              <button
+                className="pagination-btn"
+                disabled={page >= totalPages}
+                onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+                type="button"
+              >
+                Sau
+                <Icon name="arrow" size={15} />
+              </button>
+            </div>
           </div>
         )}
       </section>
