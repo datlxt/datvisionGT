@@ -4,7 +4,7 @@ import csv
 import io
 import uuid
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -72,6 +72,7 @@ class ResultList(BaseModel):
     total: int
     counts: dict[str, int]
     events: list[EventResult]
+    cross_check: dict[str, Any] | None = None  # background AI cross-check status/summary
 
 
 def _artifact_url(job_id: uuid.UUID, artifact: Artifact) -> str:
@@ -528,6 +529,7 @@ def get_results(job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)])
         total=len(events),
         counts=counts,
         events=events,
+        cross_check=(job.config_snapshot or {}).get("cross_check"),
     )
 
 
@@ -704,6 +706,7 @@ class CrossCheckSummary(BaseModel):
     agree: int
     disagree: int
     unverified: int
+    auto_verified: int = 0
 
 
 @router.post("/{job_id}/cross-check", response_model=CrossCheckSummary)
@@ -728,11 +731,31 @@ def cross_check_ocr(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
 
     agree, disagree, unverified = run_cross_check(session, job, settings)
+    # Fast-track the unanimous (all 3 readers agree) cases automatically. Lazy import avoids a
+    # module-load cycle (ground_truth imports from this module).
+    from app.api.ground_truth import auto_verify_unanimous
+
+    auto_verified = auto_verify_unanimous(job.id, session)
+    from app.workers.cross_check import set_cross_check_status
+
+    set_cross_check_status(
+        session,
+        job,
+        {
+            "status": "done",
+            "checked": agree + disagree + unverified,
+            "agree": agree,
+            "disagree": disagree,
+            "unverified": unverified,
+            "auto_verified": auto_verified,
+        },
+    )
     return CrossCheckSummary(
         checked=agree + disagree + unverified,
         agree=agree,
         disagree=disagree,
         unverified=unverified,
+        auto_verified=auto_verified,
     )
 
 

@@ -564,16 +564,36 @@ def consolidate_vehicle_events(
         # frame (rider's hand) or has a non-plate aspect. Only unreadable ones are judged so
         # a genuinely dirty real plate (low + plate-shaped) is never dropped.
         card_false_positive = False
+        non_plate_shape_read = False
         plate_bbox = event.best_observation.plate_bbox
-        if event.classification == EventClassification.UNREADABLE and plate_bbox is not None:
+        if plate_bbox is not None:
             _, vy1, _, vy2 = event.best_observation.vehicle_bbox
             plate_height = plate_bbox[3] - plate_bbox[1]
             vehicle_height = vy2 - vy1
-            if plate_height > 0 and vehicle_height > 0:
-                vertical_position = ((plate_bbox[1] + plate_bbox[3]) / 2 - vy1) / vehicle_height
+            if plate_height > 0:
                 aspect = (plate_bbox[2] - plate_bbox[0]) / plate_height
-                card_false_positive = (
-                    vertical_position < 0.50 or aspect < 1.0 or aspect > 2.5
+                # A real 2-row plate is roughly square-to-landscape (aspect ~1.0-2.0). A floor
+                # lane-marking is far too wide (aspect ~4), a tail-lamp too tall/square (<1) —
+                # anything outside a generous plate band is not a plate shape.
+                non_plate_aspect = aspect < 1.0 or aspect > 2.5
+                if vehicle_height > 0:
+                    vertical_position = (
+                        (plate_bbox[1] + plate_bbox[3]) / 2 - vy1
+                    ) / vehicle_height
+                    card_false_positive = (
+                        event.classification == EventClassification.UNREADABLE
+                        and (vertical_position < 0.50 or non_plate_aspect)
+                    )
+                # The detector sometimes fires on a lane-marking / lamp / logo and the OCR turns
+                # the noise into a plausible string, so the event is LOW_CONFIDENCE (not
+                # UNREADABLE) and slips past the card filter above. A plate read on a SINGLE
+                # frame with a non-plate aspect is exactly such a false positive: a real plate is
+                # read across many frames as the bike moves, or is at least plate-shaped, so it is
+                # never dropped here. (Plate-shaped logos are caught later by the AI cross-check.)
+                non_plate_shape_read = (
+                    event.classification == EventClassification.LOW_CONFIDENCE
+                    and "SINGLE_READING_OCR" in event.quality_flags
+                    and non_plate_aspect
                 )
         if (
             event.plate_detection_count == 0
@@ -583,6 +603,7 @@ def consolidate_vehicle_events(
             or split_unreadable_fragment
             or duplicate_plate_fragment
             or card_false_positive
+            or non_plate_shape_read
         ):
             continue
         consolidated.append(event)

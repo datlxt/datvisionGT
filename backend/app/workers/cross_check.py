@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -28,6 +29,10 @@ from app.vision.plate.cloud_ocr import (
 )
 from app.vision.plate.domain import plate_key
 
+# Plates read in parallel per run. The bottleneck is per-plate network latency, so concurrency
+# collapses the total wait; kept moderate to stay under typical cloud rate limits.
+_CROSS_CHECK_CONCURRENCY = 8
+
 # Flags this pass owns — cleared before each run so re-running is idempotent.
 CROSS_CHECK_FLAGS = (
     "OCR_AGREE",
@@ -36,7 +41,18 @@ CROSS_CHECK_FLAGS = (
     "OCR_UNVERIFIED",
     "QUALITY_AGREE",
     "QUALITY_DISAGREEMENT",
+    "SUSPECTED_NON_PLATE",
 )
+
+
+def set_cross_check_status(session: Session, job: ProcessingJob, status: dict) -> None:
+    """Record cross-check progress on the job so the review UI can show it and auto-refresh."""
+
+    snapshot = dict(job.config_snapshot or {})
+    snapshot["cross_check"] = status
+    job.config_snapshot = snapshot
+    flag_modified(job, "config_snapshot")
+    session.commit()
 
 
 def run_cross_check(
@@ -47,7 +63,11 @@ def run_cross_check(
     Returns ``(agree, disagree, unverified)``. Commits the session.
     """
 
+    set_cross_check_status(session, job, {"status": "running"})
     agree = disagree = unverified = 0
+
+    # Phase 1 — gather every plate crop + its context (fast DB reads, main thread only).
+    work: list[tuple[Track, Detection, RecognitionResult | None, bytes]] = []
     tracks = session.scalars(
         select(Track).where(Track.job_id == job.id, Track.object_type == "VEHICLE")
     ).all()
@@ -72,9 +92,23 @@ def run_cross_check(
                 RecognitionResult.stage == "TRACK_VOTE",
             )
         )
+        work.append((track, vehicle, recognition, image_bytes))
 
-        gpt = read_plate_openai(image_bytes, settings)
-        qwen = read_plate_qwen(image_bytes, settings)
+    # Phase 2 — call the cloud readers for ALL plates CONCURRENTLY. This is pure network I/O
+    # (the slow part), so a thread pool turns N sequential round-trips into N/CONCURRENCY — the
+    # whole cross-check goes from minutes to seconds. No DB access happens inside the threads.
+    def read_both(item: tuple[Track, Detection, RecognitionResult | None, bytes]):
+        img = item[3]
+        return read_plate_openai(img, settings), read_plate_qwen(img, settings)
+
+    if work:
+        with ThreadPoolExecutor(max_workers=_CROSS_CHECK_CONCURRENCY) as pool:
+            ai_reads = list(pool.map(read_both, work))
+    else:
+        ai_reads = []
+
+    # Phase 3 — apply results + write flags (sequential, main thread — DB is not thread-safe).
+    for (track, vehicle, recognition, _image), (gpt, qwen) in zip(work, ai_reads, strict=True):
         raw = dict(vehicle.raw_output or {})
         flags = [f for f in raw.get("quality_flags", []) if f not in CROSS_CHECK_FLAGS]
         if gpt is None and qwen is None:
@@ -110,6 +144,17 @@ def run_cross_check(
             else:
                 flags.append("OCR_DISAGREEMENT")  # no majority — a human decides
                 disagree += 1
+            # A crop the local model read a plate on but that BOTH AIs saw as empty is almost
+            # certainly NOT a plate (a logo / tail-light / sticker the detector fired on) — real
+            # plates get read by the AIs too. Flag it so the reviewer can quickly discard it.
+            ai_present = [r for r in (gpt, qwen) if r is not None]
+            if (
+                len(ai_present) >= 2
+                and all(not reader.plate for reader in ai_present)
+                and recognition is not None
+                and recognition.predicted_text
+            ):
+                flags.append("SUSPECTED_NON_PLATE")
             # (2) Quality cross-check. Two DIFFERENT-vendor AI labels are the primary check; the
             # deterministic local signal is the fallback when only one AI answered.
             groups = {
@@ -138,7 +183,17 @@ def run_cross_check(
         raw["quality_flags"] = flags
         vehicle.raw_output = raw
         flag_modified(vehicle, "raw_output")
-    session.commit()
+    set_cross_check_status(
+        session,
+        job,
+        {
+            "status": "done",
+            "checked": agree + disagree + unverified,
+            "agree": agree,
+            "disagree": disagree,
+            "unverified": unverified,
+        },
+    )
     return agree, disagree, unverified
 
 
@@ -153,4 +208,26 @@ def cross_check_job(job_id: str) -> dict[str, int | str]:
         if job is None:
             return {"skipped": "job_not_found"}
         agree, disagree, unverified = run_cross_check(session, job, settings)
-    return {"agree": agree, "disagree": disagree, "unverified": unverified}
+        # Fast-track the unanimous (all 3 readers agree) cases automatically — the reviewer only
+        # deals with disagreements. Lazy import avoids a module-load cycle with the API layer.
+        from app.api.ground_truth import auto_verify_unanimous
+
+        auto_verified = auto_verify_unanimous(job.id, session)
+        set_cross_check_status(
+            session,
+            job,
+            {
+                "status": "done",
+                "checked": agree + disagree + unverified,
+                "agree": agree,
+                "disagree": disagree,
+                "unverified": unverified,
+                "auto_verified": auto_verified,
+            },
+        )
+    return {
+        "agree": agree,
+        "disagree": disagree,
+        "unverified": unverified,
+        "auto_verified": auto_verified,
+    }

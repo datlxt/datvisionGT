@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { Icon } from "../components/Icon";
-import { PageHeader, ProgressBar, StatusBadge } from "../components/ui";
+import { ConfirmDialog, PageHeader, ProgressBar, StatusBadge } from "../components/ui";
 import { api } from "../lib/api";
 import {
   formatBytes,
@@ -23,6 +23,8 @@ export function ProcessingPage({
 }) {
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState("");
+  const [cancelling, setCancelling] = useState(false);
+  const [showCancel, setShowCancel] = useState(false);
 
   useEffect(() => {
     if (["WAITING_FOR_REVIEW", "COMPLETED", "FAILED", "CANCELLED"].includes(job.status)) {
@@ -36,14 +38,18 @@ export function ProcessingPage({
 
   const ready = isReadyForReview(job);
   const canRetry = ["FAILED", "CANCELLED"].includes(job.status);
+  // Actively working: draft/queued/processing — the only states a cancel makes sense in.
+  const running = !["WAITING_FOR_REVIEW", "COMPLETED", "FAILED", "CANCELLED"].includes(job.status);
   const stageIndex =
     job.current_stage === "RESULTS_READY" || ready
-      ? 3
-      : job.progress >= 70
-        ? 2
-        : job.progress > 0
-          ? 1
-          : 0;
+      ? 4
+      : job.current_stage === "CROSS_CHECKING"
+        ? 3
+        : job.progress >= 70
+          ? 2
+          : job.progress > 0
+            ? 1
+            : 0;
 
   async function retry() {
     setRetrying(true);
@@ -54,6 +60,19 @@ export function ProcessingPage({
       setRetryError(reason instanceof Error ? reason.message : "Không thể chạy lại job.");
     } finally {
       setRetrying(false);
+    }
+  }
+
+  async function cancel() {
+    setCancelling(true);
+    setRetryError("");
+    try {
+      onUpdate(await api<Job>(`/api/v1/jobs/${job.id}/cancel`, { method: "POST" }));
+      setShowCancel(false);
+    } catch (reason) {
+      setRetryError(reason instanceof Error ? reason.message : "Không thể hủy job.");
+    } finally {
+      setCancelling(false);
     }
   }
 
@@ -108,8 +127,9 @@ export function ProcessingPage({
           <ol className="pipeline-list">
             {[
               ["Evidence", "PTS, SHA-256 và full frame"],
-              ["Detect & OCR", "Xe máy, biển số và OCR"],
+              ["Detect & OCR", "Xe, biển số và OCR"],
               ["Tracking & vote", "Gộp nhiều frame thành một lượt xe"],
+              ["Đối chiếu AI", "2 model AI đọc lại + tự duyệt case khớp"],
             ].map(([title, description], index) => (
               <li className={stageIndex > index ? "done" : stageIndex === index ? "active" : ""} key={title}>
                 <span>{stageIndex > index ? <Icon name="check" size={16} /> : index + 1}</span>
@@ -153,6 +173,16 @@ export function ProcessingPage({
               <Icon name="refresh" size={18} />
               {retrying ? "Đang đưa lại vào hàng đợi…" : "Tiếp tục job bị gián đoạn"}
             </button>
+          ) : running ? (
+            <button
+              className="button button-danger button-block"
+              disabled={cancelling}
+              onClick={() => setShowCancel(true)}
+              type="button"
+            >
+              <Icon name="x" size={18} />
+              {cancelling ? "Đang hủy…" : "Hủy job"}
+            </button>
           ) : (
             <button
               className="button button-primary button-block"
@@ -166,6 +196,23 @@ export function ProcessingPage({
           )}
         </aside>
       </div>
+
+      <ConfirmDialog
+        busy={cancelling}
+        cancelLabel="Không, tiếp tục chạy"
+        confirmLabel="Hủy job"
+        description={
+          <>
+            Dừng xử lý <strong>{job.source_name}</strong>? Tiến độ hiện tại (
+            {Math.round(job.progress)}%) sẽ dừng lại. Bạn có thể chạy lại sau bằng nút &quot;Tiếp
+            tục&quot;.
+          </>
+        }
+        onCancel={() => setShowCancel(false)}
+        onConfirm={cancel}
+        open={showCancel}
+        title="Hủy job đang chạy?"
+      />
     </section>
   );
 }

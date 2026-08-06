@@ -88,6 +88,14 @@ export type ResultList = {
   total: number;
   counts: Record<EventClassification, number>;
   events: EventResult[];
+  cross_check?: {
+    status: "pending" | "running" | "done";
+    checked?: number;
+    agree?: number;
+    disagree?: number;
+    unverified?: number;
+    auto_verified?: number;
+  } | null;
 };
 
 export type VerifyStatus = "UNVERIFIED" | "IN_REVIEW" | "VERIFIED" | "DISCARDED";

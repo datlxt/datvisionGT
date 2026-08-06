@@ -87,6 +87,46 @@ def test_short_no_plate_vehicle_is_kept_not_dropped() -> None:
     assert merged[0].classification == EventClassification.NO_PLATE
 
 
+def _single_read_event(plate_bbox: tuple[int, int, int, int]):
+    # A plate detected + read on ONE frame → LOW_CONFIDENCE + SINGLE_READING_OCR, the exact
+    # shape of a floor-line / lamp / logo false positive the detector fires on once.
+    obs = FrameObservation(
+        frame_number=1,
+        timestamp_ms=250,
+        vehicle_bbox=(150, 300, 700, 720),
+        vehicle_confidence=0.7,
+        full_frame_key="frame-1.jpg",
+        vehicle_label="motorcycle",
+        plate_bbox=plate_bbox,
+        plate_confidence=0.5,
+        reading=PlateReading("39B164111", 0.5, ()),
+        quality_score=0.4,
+    )
+    event = finalize_vehicle_track(VehicleTrack("VEHICLE_000001", [obs]))
+    assert event.classification == EventClassification.LOW_CONFIDENCE
+    assert "SINGLE_READING_OCR" in event.quality_flags
+    return event
+
+
+def test_single_frame_wide_floor_line_read_is_dropped() -> None:
+    # aspect ~4 (337x85) — a floor lane-marking the detector mis-read as a plate.
+    event = _single_read_event((100, 600, 437, 685))
+    assert consolidate_vehicle_events([event]) == []
+
+
+def test_single_frame_square_lamp_read_is_dropped() -> None:
+    # aspect ~0.9 (238x255) — a tail-lamp mis-read as a plate.
+    event = _single_read_event((300, 400, 538, 655))
+    assert consolidate_vehicle_events([event]) == []
+
+
+def test_single_frame_plate_shaped_low_confidence_read_is_kept() -> None:
+    # aspect ~1.3 (120x92) — a genuinely plate-shaped read must survive even when read once,
+    # so a real dim/fast plate is never dropped by the non-plate suppressor.
+    event = _single_read_event((350, 450, 470, 542))
+    assert len(consolidate_vehicle_events([event])) == 1
+
+
 def test_motion_only_track_is_a_review_candidate_not_confirmed_no_plate() -> None:
     track = VehicleTrack(
         "VEHICLE_000001",

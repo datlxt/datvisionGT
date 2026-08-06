@@ -26,6 +26,7 @@ export function MissedCaseDialog({
   const [noPlate, setNoPlate] = useState(false);
   const [plate, setPlate] = useState("");
   const [timestamp, setTimestamp] = useState(defaultTimestamp);
+  const [endTimestamp, setEndTimestamp] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -33,8 +34,21 @@ export function MissedCaseDialog({
   function submit() {
     const ms = parseTimestamp(timestamp);
     if (ms === null) {
-      setError("Thời điểm phải dạng mm:ss (vd 6:59).");
+      setError("Thời điểm bắt đầu phải dạng mm:ss (vd 6:59).");
       return;
+    }
+    // End is optional; when given it defines the vehicle's time window (start → end).
+    let endMs: number | null = null;
+    if (endTimestamp.trim()) {
+      endMs = parseTimestamp(endTimestamp);
+      if (endMs === null) {
+        setError("Thời điểm kết thúc phải dạng mm:ss (vd 7:05).");
+        return;
+      }
+      if (endMs < ms) {
+        setError("Thời điểm kết thúc phải sau thời điểm bắt đầu.");
+        return;
+      }
     }
     if (!noPlate && !plate.trim()) {
       setError("Nhập biển số, hoặc chọn Xe không biển.");
@@ -47,6 +61,7 @@ export function MissedCaseDialog({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         timestamp_ms: ms,
+        end_timestamp_ms: endMs,
         gt_text: noPlate ? "" : plate.trim(),
         no_plate: noPlate,
         note: note.trim() || null,
@@ -99,14 +114,24 @@ export function MissedCaseDialog({
               />
             </label>
           )}
-          <label>
-            Thời điểm (mm:ss)
-            <input
-              onChange={(event) => setTimestamp(event.target.value)}
-              placeholder="VD 6:59"
-              value={timestamp}
-            />
-          </label>
+          <div className="missed-time-row">
+            <label>
+              Bắt đầu (mm:ss)
+              <input
+                onChange={(event) => setTimestamp(event.target.value)}
+                placeholder="VD 6:59"
+                value={timestamp}
+              />
+            </label>
+            <label>
+              Kết thúc (mm:ss)
+              <input
+                onChange={(event) => setEndTimestamp(event.target.value)}
+                placeholder="tuỳ chọn"
+                value={endTimestamp}
+              />
+            </label>
+          </div>
           <label>
             Ghi chú
             <input

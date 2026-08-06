@@ -1284,8 +1284,14 @@ code {
   pointer-events: none;
 }
 
+/* Cross-check confirmed (all 3 readers agree) — strong solid green = trustworthy. */
+.ct-verified {
+  background: #15803d;
+}
+
+/* Read but not cross-check-confirmed yet — lighter green so it reads as "not final". */
 .ct-recognized {
-  background: #16a34a;
+  background: #7cc79a;
 }
 
 .ct-low_confidence {
@@ -1702,6 +1708,12 @@ code {
   position: sticky;
   top: 0;
   background: #f8fafc;
+}
+
+.missed-time-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
 
 .missed-form {
@@ -2529,6 +2541,41 @@ code {
 
 .crosscheck-info .crosscheck-verdict {
   color: #64748b;
+}
+
+/* Background AI cross-check status banner on the review page */
+.crosscheck-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 1500px;
+  margin: -4px auto 12px;
+  padding: 9px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.crosscheck-banner-running {
+  background: #e4effd;
+  border: 1px solid #b9d5f7;
+  color: var(--blue);
+}
+
+.crosscheck-banner-done {
+  background: #f3fbf5;
+  border: 1px solid #bbe7c6;
+  color: #15803d;
+}
+
+.crosscheck-banner strong {
+  font-weight: 800;
+}
+
+.spinner-sm {
+  width: 15px;
+  height: 15px;
+  border-width: 2px;
 }
 
 .ground-truth-section {

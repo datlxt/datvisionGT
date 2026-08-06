@@ -129,12 +129,20 @@ function isRiskyRead(event: EventResult): boolean {
   );
 }
 
+// A case that still needs a human in "Cần xem lại": either the READ is risky (isRiskyRead), OR
+// the plate is fine but the two AIs disagreed on the quality CATEGORY (a human must pick it, so
+// an auto-verified case never silently carries an empty classification).
+function needsReview(event: EventResult): boolean {
+  return isRiskyRead(event) || event.quality_flags.includes("QUALITY_DISAGREEMENT");
+}
+
 // Turn the internal engine flags into plain Vietnamese the reviewer can act on. Flags not in
 // this map (dedup / motion bookkeeping) are hidden — they are noise for a human reviewer.
 const FLAG_META: Record<string, { label: string; tone: "warn" | "info" | "ok" }> = {
   WEAK_CHARACTER: { label: "Ký tự bị che / chói", tone: "warn" },
   SINGLE_READING_OCR: { label: "Chỉ đọc được 1 khung hình", tone: "warn" },
   OCR_DISAGREEMENT: { label: "AI đọc lệch model", tone: "warn" },
+  SUSPECTED_NON_PLATE: { label: "Nghi KHÔNG phải biển (logo/đèn?)", tone: "warn" },
   QUALITY_DISAGREEMENT: { label: "Phân loại chưa chắc", tone: "warn" },
   OCR_UNVERIFIED: { label: "Chưa kiểm chéo được", tone: "info" },
   OCR_AGREE: { label: "AI khớp model", tone: "ok" },
@@ -147,6 +155,13 @@ function friendlyFlags(flags: string[]) {
   const hidden = confirmed
     ? new Set(["WEAK_CHARACTER", "SINGLE_READING_OCR", "QUALITY_DISAGREEMENT"])
     : new Set<string>();
+  // "Nghi không phải biển" is the specific, actionable message; the generic "AI đọc lệch"
+  // and low-char-confidence chips are just noise once we know it's likely a logo/light.
+  if (flags.includes("SUSPECTED_NON_PLATE")) {
+    hidden.add("OCR_DISAGREEMENT");
+    hidden.add("WEAK_CHARACTER");
+    hidden.add("SINGLE_READING_OCR");
+  }
   return flags
     .filter((flag) => flag in FLAG_META && !hidden.has(flag))
     .map((flag) => ({ flag, ...FLAG_META[flag] }));
@@ -168,9 +183,16 @@ function CrossCheckCard({ event }: { event: EventResult }) {
   const disagree = event.quality_flags.includes("OCR_DISAGREEMENT");
   const unanimous = event.quality_flags.includes("OCR_UNANIMOUS");
   const agree = event.quality_flags.includes("OCR_AGREE");
+  const nonPlate = event.quality_flags.includes("SUSPECTED_NON_PLATE");
   const verdict = unverified
     ? { cls: "info", icon: "clock" as const, text: "Chưa kiểm chéo được (mạng / AI lỗi) — thử lại sau." }
-    : disagree
+    : nonPlate
+      ? {
+          cls: "diff",
+          icon: "alert" as const,
+          text: "Cả 2 AI đều KHÔNG thấy biển — nghi là logo / đèn / vật khác, không phải biển. Nên Loại.",
+        }
+      : disagree
       ? { cls: "diff", icon: "alert" as const, text: "Các nguồn đọc KHÁC nhau — nhìn kỹ crop rồi chọn biển đúng." }
       : unanimous
         ? { cls: "same", icon: "check" as const, text: "Cả 3 nguồn cùng đọc một biển — đáng tin." }
@@ -227,6 +249,7 @@ export function ReviewPage({ job }: { job: Job }) {
     agree: number;
     disagree: number;
     unverified: number;
+    auto_verified?: number;
     error?: string;
   } | null>(null);
   const [videoMs, setVideoMs] = useState(0);
@@ -237,12 +260,33 @@ export function ReviewPage({ job }: { job: Job }) {
     api<ResultList>(`/api/v1/jobs/${job.id}/results`)
       .then((payload) => {
         setResults(payload);
-        setSelectedId(payload.events[0]?.track_id ?? null);
+        setSelectedId((current) => current ?? payload.events[0]?.track_id ?? null);
       })
       .catch((reason: unknown) =>
         setError(reason instanceof Error ? reason.message : "Không thể tải kết quả."),
       );
   }, [job.id, reloadToken]);
+
+  // Auto-refresh while the background AI cross-check runs, so its results appear on their own.
+  useEffect(() => {
+    const status = results?.cross_check?.status;
+    if (status !== "pending" && status !== "running") return;
+    const timer = setTimeout(() => setReloadToken((value) => value + 1), 4000);
+    return () => clearTimeout(timer);
+  }, [results]);
+
+  // Two-way sync: while the video plays/seeks, auto-select the track whose time window covers the
+  // current position so the left-column crop follows what's on screen.
+  useEffect(() => {
+    if (evidenceTab !== "video" || !results) return;
+    const containing = results.events.find(
+      (event) =>
+        videoMs >= event.start_timestamp_ms && videoMs <= event.end_timestamp_ms,
+    );
+    if (containing && containing.track_id !== selectedId) {
+      setSelectedId(containing.track_id);
+    }
+  }, [videoMs, evidenceTab, results, selectedId]);
 
   useEffect(() => {
     api<GroundTruthList>(`/api/v1/jobs/${job.id}/ground-truth`)
@@ -269,7 +313,7 @@ export function ReviewPage({ job }: { job: Job }) {
       if (filter === "NO_PLATE") return event.classification === "NO_PLATE";
       if (filter === "REVIEW") {
         return (
-          isRiskyRead(event) &&
+          needsReview(event) &&
           gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED"
         );
       }
@@ -285,12 +329,12 @@ export function ReviewPage({ job }: { job: Job }) {
       (event) => gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED",
     ).length ?? 0;
 
-  // Risky reads still WAITING for a human — drops as they get verified. Includes occluded
-  // "recognized" plates (WEAK_CHARACTER) so a confident-but-wrong read can't slip past review.
+  // Cases still WAITING for a human — risky reads AND plate-fine-but-quality-undecided. Drops as
+  // they get verified, so a quality-disagreement case can never be silently missed.
   const needReviewCount =
     results?.events.filter(
       (event) =>
-        isRiskyRead(event) &&
+        needsReview(event) &&
         gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED",
     ).length ?? 0;
 
@@ -331,6 +375,17 @@ export function ReviewPage({ job }: { job: Job }) {
     seekVideo(ratio * totalMs);
   }
 
+  // Explicit user pick (list click / prev-next): show the video and jump it to this track's
+  // start. This is the ONLY path that seeks on selection — playback-follow selection (the
+  // videoMs effect) must never seek, or it would yank the playhead back every frame.
+  function selectTrack(trackId: string, startMs: number) {
+    setSelectedId(trackId);
+    setEvidenceTab("video");
+    if (videoRef.current) {
+      videoRef.current.currentTime = startMs / 1000;
+    }
+  }
+
   function runAutoVerify() {
     setAutoBusy(true);
     api<{ verified: number }>(`/api/v1/jobs/${job.id}/ground-truth/auto-verify`, {
@@ -350,7 +405,13 @@ export function ReviewPage({ job }: { job: Job }) {
 
   function runCrossCheck() {
     setCrossBusy(true);
-    api<{ checked: number; agree: number; disagree: number; unverified: number }>(
+    api<{
+      checked: number;
+      agree: number;
+      disagree: number;
+      unverified: number;
+      auto_verified: number;
+    }>(
       `/api/v1/jobs/${job.id}/cross-check`,
       { method: "POST" },
     )
@@ -381,11 +442,16 @@ export function ReviewPage({ job }: { job: Job }) {
   const suspected = results?.events.filter(isSuspectedNoPlate).length ?? 0;
   const selectedStartMs = selected?.start_timestamp_ms ?? 0;
 
+  // Seek only when the evidence view switches TO video, reading the latest selected start from
+  // a ref. Keying the effect on `evidenceTab` alone (not selectedStartMs) stops it re-firing
+  // and seeking backwards every time playback auto-selects the track under the playhead.
+  const selectedStartRef = useRef(selectedStartMs);
+  selectedStartRef.current = selectedStartMs;
   useEffect(() => {
     if (evidenceTab === "video" && videoRef.current) {
-      videoRef.current.currentTime = selectedStartMs / 1000;
+      videoRef.current.currentTime = selectedStartRef.current / 1000;
     }
-  }, [selectedStartMs, evidenceTab]);
+  }, [evidenceTab]);
 
   if (error) {
     return (
@@ -471,6 +537,16 @@ export function ReviewPage({ job }: { job: Job }) {
         </button>
       </div>
 
+      {results.cross_check?.status === "done" && (
+        <div className="crosscheck-banner crosscheck-banner-done">
+          <Icon name="check" size={16} /> Đã kiểm chéo AI:{" "}
+          <strong>{results.cross_check.auto_verified ?? 0}</strong> tự duyệt (3 nguồn khớp) ·{" "}
+          <strong>{results.cross_check.disagree ?? 0}</strong> cần xem lại
+          {(results.cross_check.unverified ?? 0) > 0 &&
+            ` · ${results.cross_check.unverified} chưa kiểm được`}
+        </div>
+      )}
+
       <div className="review-toolbar card">
         <label>
           <Icon name="search" size={18} />
@@ -515,7 +591,7 @@ export function ReviewPage({ job }: { job: Job }) {
                 <button
                   className={`track-item ${event.track_id === selected.track_id ? "active" : ""}`}
                   key={event.track_id}
-                  onClick={() => setSelectedId(event.track_id)}
+                  onClick={() => selectTrack(event.track_id, event.start_timestamp_ms)}
                   type="button"
                 >
                   <img
@@ -579,15 +655,19 @@ export function ReviewPage({ job }: { job: Job }) {
                   title="Click bất kỳ đâu để tua video tới đúng vị trí đó"
                 >
                   {results.events.map((event) => {
-                    // Risky reads (occluded/weak-character plates included) paint as the orange
-                    // "Cần xem lại" band even when the model marked them RECOGNIZED, so the
-                    // reviewer can spot the exact video moments that need a careful look.
-                    const risky = isRiskyRead(event);
+                    // Three timeline states: orange = needs a look (risky/disagreement); solid
+                    // green = all 3 readers agreed (cross-check confirmed); plain green = read but
+                    // not cross-check-confirmed. Gaps (nghi bỏ sót) are drawn separately.
+                    const risky = needsReview(event);
+                    const confirmed = event.quality_flags.includes("OCR_UNANIMOUS");
+                    const cls = risky
+                      ? "ct-low_confidence ct-risky"
+                      : confirmed
+                        ? "ct-verified"
+                        : `ct-${event.classification.toLowerCase()}`;
                     return (
                       <span
-                        className={`ct-seg ct-${
-                          risky ? "low_confidence" : event.classification.toLowerCase()
-                        }${risky ? " ct-risky" : ""}`}
+                        className={`ct-seg ${cls}`}
                         key={event.track_id}
                         title={
                           risky
@@ -597,9 +677,9 @@ export function ReviewPage({ job }: { job: Job }) {
                                   ? "Xe không biển"
                                   : "?")
                               } — cần xem lại (${toClock(event.start_timestamp_ms)})`
-                            : `${event.normalized_plate ?? ""} (${toClock(
-                                event.start_timestamp_ms,
-                              )})`
+                            : `${event.normalized_plate ?? ""}${
+                                confirmed ? " — 3 nguồn khớp" : ""
+                              } (${toClock(event.start_timestamp_ms)})`
                         }
                         style={{
                           left: `${(event.start_timestamp_ms / totalMs) * 100}%`,
@@ -647,7 +727,10 @@ export function ReviewPage({ job }: { job: Job }) {
                 )}
                 <div className="ct-legend">
                   <span>
-                    <i className="ct-sw ct-recognized" /> Đã đọc biển
+                    <i className="ct-sw ct-verified" /> 3 nguồn khớp (đáng tin)
+                  </span>
+                  <span>
+                    <i className="ct-sw ct-recognized" /> Đọc được (chưa kiểm chéo)
                   </span>
                   <span>
                     <i className="ct-sw ct-low_confidence" /> Cần xem lại (gồm cả xe không biển)
@@ -807,24 +890,31 @@ export function ReviewPage({ job }: { job: Job }) {
               cloudQuality={selected.cloud_quality}
               qwenQuality={selected.qwen_quality}
               onChanged={() => setGtReload((value) => value + 1)}
-              qualityDisagree={
-                selected.quality_flags.includes("QUALITY_DISAGREEMENT") &&
-                !selected.quality_flags.includes("OCR_AGREE")
-              }
+              qualityDisagree={selected.quality_flags.includes("QUALITY_DISAGREEMENT")}
               record={selectedGt}
             />
 
             <footer className="review-navigation">
               <button
                 disabled={selectedIndex <= 0}
-                onClick={() => setSelectedId(filteredEvents[selectedIndex - 1].track_id)}
+                onClick={() =>
+                  selectTrack(
+                    filteredEvents[selectedIndex - 1].track_id,
+                    filteredEvents[selectedIndex - 1].start_timestamp_ms,
+                  )
+                }
                 type="button"
               >
                 ← Record trước
               </button>
               <button
                 disabled={selectedIndex < 0 || selectedIndex >= filteredEvents.length - 1}
-                onClick={() => setSelectedId(filteredEvents[selectedIndex + 1].track_id)}
+                onClick={() =>
+                  selectTrack(
+                    filteredEvents[selectedIndex + 1].track_id,
+                    filteredEvents[selectedIndex + 1].start_timestamp_ms,
+                  )
+                }
                 type="button"
               >
                 Record tiếp →
@@ -914,17 +1004,17 @@ export function ReviewPage({ job }: { job: Job }) {
               <>
                 <p>
                   Đọc lại <strong>{crossResult.checked}</strong> biển bằng <strong>2 model AI
-                  (cloud)</strong> rồi so với <strong>model local</strong>. Ba nguồn cùng đọc thì
-                  tin; khác nhau thì cần bạn xem.
+                  (cloud)</strong> rồi so với <strong>model local</strong>. Cả 3 cùng đọc → tự
+                  duyệt; khác nhau → cần bạn xem.
                 </p>
                 <div className="cross-stats">
                   <div className="cross-stat cross-stat-ok">
-                    <strong>{crossResult.agree}</strong>
-                    <span>Khớp — 3 nguồn giống nhau, đáng tin</span>
+                    <strong>{crossResult.auto_verified ?? 0}</strong>
+                    <span>Tự duyệt — cả 3 nguồn khớp, đã xác nhận GT</span>
                   </div>
                   <div className="cross-stat cross-stat-diff">
                     <strong>{crossResult.disagree}</strong>
-                    <span>Khác — có bất đồng, đã đưa vào &quot;Cần xem lại&quot;</span>
+                    <span>Cần xem lại — có nguồn đọc khác, chờ bạn quyết</span>
                   </div>
                   {crossResult.unverified > 0 && (
                     <div className="cross-stat cross-stat-muted">

@@ -356,6 +356,26 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
                             )
                         )
 
+            # Persist the local results first so the cloud cross-check can read them back.
+            session.commit()
+            # Fold the AI cross-check INTO the pipeline (not a separate second wait): re-read every
+            # plate with the cloud readers, flag disagreements, and fast-track the unanimous cases —
+            # so by the time the job reaches WAITING_FOR_REVIEW the AI second-opinions are already
+            # attached and the reviewer waits only ONCE (import → done). Never fails the job;
+            # skipped entirely when cloud readers aren't configured (fully offline).
+            if settings.cloud_ocr_available:
+                try:
+                    job.current_stage = "CROSS_CHECKING"
+                    job.progress = 92.0
+                    session.commit()
+                    from app.api.ground_truth import auto_verify_unanimous
+                    from app.workers.cross_check import run_cross_check
+
+                    run_cross_check(session, job, settings)
+                    auto_verify_unanimous(job.id, session)
+                except Exception:
+                    session.rollback()  # cross-check must never break the job
+
             job.status = "WAITING_FOR_REVIEW"
             job.current_stage = "RESULTS_READY"
             job.progress = 100.0
@@ -374,24 +394,6 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
                 )
             )
             session.commit()
-            # Kick off the cloud OCR cross-check as a SEPARATE background job so the reviewer opens
-            # the case with AI second-opinions already attached — without slowing or blocking the
-            # offline pipeline. No-op when cloud readers aren't configured; never fails the job.
-            if settings.cloud_ocr_available:
-                try:
-                    from redis import Redis
-                    from rq import Queue
-
-                    Queue(
-                        settings.rq_queue, connection=Redis.from_url(settings.redis_url)
-                    ).enqueue(
-                        "app.workers.cross_check.cross_check_job",
-                        job_id,
-                        job_timeout="1h",
-                        result_ttl=86400,
-                    )
-                except Exception:
-                    pass
             return {"job_id": job_id, "status": job.status, "event_count": len(events)}
         except Exception as exc:
             session.rollback()

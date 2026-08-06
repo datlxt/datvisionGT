@@ -479,12 +479,62 @@ def auto_verify_ground_truth(
     return AutoVerifyResponse(verified=verified, min_confidence=payload.min_confidence)
 
 
+def auto_verify_unanimous(job_id: uuid.UUID, session: Session) -> int:
+    """Fast-track only the SAFEST cases: those where every reader (local + AI-1 + AI-2)
+    unanimously read the same plate. Runs automatically after the background cross-check so the
+    reviewer only has to touch the cases that actually disagree. Returns the count verified.
+
+    Safe because it needs the LOCAL model to agree too (never AI alone), and a human can always
+    change any auto-verified value later.
+    """
+
+    job, events = _load_results(job_id, session)
+    _materialize_records(session, job, events)
+    reviewer = gt.get_or_create_default_reviewer(session)
+    verified = 0
+    for event in events:
+        if (
+            "OCR_UNANIMOUS" not in event.quality_flags
+            or event.classification != "RECOGNIZED"
+            or not event.normalized_plate
+            # Only fully-resolved cases are auto-verified: if the two AIs disagree on the plate
+            # QUALITY category, keep it in "Cần xem lại" so a human picks the category — otherwise
+            # a verified case would silently carry an empty classification and be missed.
+            or "QUALITY_DISAGREEMENT" in event.quality_flags
+        ):
+            continue
+        record = session.scalar(
+            select(GroundTruthRecord).where(
+                GroundTruthRecord.job_id == job.id,
+                GroundTruthRecord.track_id == event.track_id,
+            )
+        )
+        if record is None or record.verify_status == "VERIFIED":
+            continue
+        gt.apply_edit(session, record, gt_text=event.normalized_plate, actor_id=reviewer.id)
+        # Also attach the plate-quality category when the two AIs + local signal AGREED on it
+        # (QUALITY_AGREE). On disagreement the plate is still auto-verified but the category is
+        # left blank for a human — we don't guess quality when the readers conflict.
+        if "QUALITY_AGREE" in event.quality_flags and event.cloud_quality:
+            record.classification = event.cloud_quality
+        record.quality_flags = sorted({*record.quality_flags, "AUTO_VERIFIED_UNANIMOUS"})
+        try:
+            gt.apply_verify(session, record, reviewer=reviewer)
+            verified += 1
+        except ValueError:
+            pass
+    _sync_job_review_status(session, job.id)
+    session.commit()
+    return verified
+
+
 # --------------------------------------------------------------------------- #
 # Add a case the model missed. Anchored to the nearest real evidence frame so
 # it stays evidence-backed (contract rule #3), no synthetic data.
 # --------------------------------------------------------------------------- #
 class ManualCaseRequest(BaseModel):
     timestamp_ms: int
+    end_timestamp_ms: int | None = None  # optional — the vehicle's exit time (window end)
     gt_text: str = ""  # empty => no-plate vehicle
     no_plate: bool = False
     note: str | None = None
@@ -516,6 +566,11 @@ def add_manual_case(
     height = frame.height or 1
     frame_number = int(frame.frame_number or 0)
     timestamp_ms = int(frame.timestamp_ms or 0)
+    # End of the vehicle's window: use the reviewer-provided exit time when it is after the anchor,
+    # otherwise the case is a single moment (start == end).
+    end_timestamp_ms = timestamp_ms
+    if payload.end_timestamp_ms is not None and payload.end_timestamp_ms > timestamp_ms:
+        end_timestamp_ms = int(payload.end_timestamp_ms)
 
     track = Track(
         job_id=job.id,
@@ -524,7 +579,7 @@ def add_manual_case(
         start_frame=frame_number,
         end_frame=frame_number,
         start_timestamp_ms=timestamp_ms,
-        end_timestamp_ms=timestamp_ms,
+        end_timestamp_ms=end_timestamp_ms,
         classification="NO_PLATE" if no_plate else "MANUAL_ADDITION",
         status="READY_FOR_REVIEW",
         evidence_status="VALID",
