@@ -1866,20 +1866,19 @@ code {
 
 /* Processing */
 
+/* Video + pipeline share ONE framed card, split by a vertical divider. */
 .processing-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(310px, 0.8fr);
   align-items: stretch;
-  gap: 20px;
+  gap: 0;
   max-width: 1160px;
   margin: 0 auto;
+  overflow: hidden;
 }
 
 .video-card {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 12px;
+  padding: 16px;
 }
 
 .video-card video {
@@ -1895,7 +1894,6 @@ code {
   display: grid;
   grid-template-columns: 1.5fr repeat(3, 1fr);
   gap: 10px;
-  margin-top: auto;
   padding: 14px 5px 3px;
 }
 
@@ -1919,6 +1917,7 @@ code {
 
 .pipeline-card {
   padding: 22px;
+  border-left: 1px solid var(--border);
 }
 
 .pipeline-progress > div {
@@ -2714,6 +2713,12 @@ code {
   .processing-grid,
   .overview-grid {
     grid-template-columns: 1fr;
+  }
+
+  /* Stacked: the divider becomes a horizontal rule between the two halves. */
+  .pipeline-card {
+    border-left: 0;
+    border-top: 1px solid var(--border);
   }
 
   .job-summary {

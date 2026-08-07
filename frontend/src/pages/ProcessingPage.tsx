@@ -94,8 +94,8 @@ export function ProcessingPage({
         title={job.source_name}
       />
 
-      <div className="processing-grid">
-        <section className="card video-card">
+      <div className="processing-grid card">
+        <section className="video-card">
           <video controls preload="metadata" src={`/api/v1/jobs/${job.id}/source`} />
           <div className="video-meta">
             <div>
@@ -119,7 +119,7 @@ export function ProcessingPage({
           </div>
         </section>
 
-        <aside className="card pipeline-card">
+        <aside className="pipeline-card">
           <div className="pipeline-progress">
             <div>
               <span>Tiến độ pipeline</span>
