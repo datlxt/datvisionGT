@@ -456,6 +456,9 @@ def auto_verify_ground_truth(
             or "WEAK_CHARACTER" in event.quality_flags
             # The second (cloud) reader disagreed — two models can't agree, so a human decides.
             or "OCR_DISAGREEMENT" in event.quality_flags
+            # Same plate appears again elsewhere — a human confirms it's a distinct pass, not a
+            # duplicate/misread, before it becomes GT.
+            or "REPEATED_PLATE" in event.quality_flags
             or (event.quality_score is not None and event.quality_score < 0.55)
         ):
             continue
@@ -501,6 +504,8 @@ def auto_verify_unanimous(job_id: uuid.UUID, session: Session) -> int:
             # QUALITY category, keep it in "Cần xem lại" so a human picks the category — otherwise
             # a verified case would silently carry an empty classification and be missed.
             or "QUALITY_DISAGREEMENT" in event.quality_flags
+            # Same plate seen again elsewhere — a human confirms it's a real distinct pass first.
+            or "REPEATED_PLATE" in event.quality_flags
         ):
             continue
         record = session.scalar(

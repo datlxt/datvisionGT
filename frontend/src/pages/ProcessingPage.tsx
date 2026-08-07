@@ -82,7 +82,15 @@ export function ProcessingPage({
         action={
           <StatusBadge tone={statusTone(job.status)}>{statusLabel(job.status)}</StatusBadge>
         }
-        description={job.job_code}
+        description={`${job.vehicle_type === "car" ? "Ô tô" : "Xe máy"} · ${new Date(
+          job.created_at,
+        ).toLocaleDateString("vi-VN", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        })}`}
         title={job.source_name}
       />
 

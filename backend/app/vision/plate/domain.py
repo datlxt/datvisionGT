@@ -387,6 +387,14 @@ def consolidate_vehicle_events(
     same_plate_gap_ms: int = 5_000,
     same_no_plate_gap_ms: int = 14_000,
     near_plate_gap_ms: int = 1_500,
+    # Max time a plate may be FULLY undetected mid-pass (occluded by a person / barrier / another
+    # vehicle) yet still count as the SAME pass. Same-plate reads farther apart than this are kept
+    # as SEPARATE passes (a bike that left and re-entered, or a misread collision) AND both are
+    # flagged REPEATED_PLATE so a human confirms they are genuinely distinct. 90s tolerates a long
+    # stop/occlusion within one pass while staying below the minutes-long gap of a real re-entry.
+    # Note: a plate that stays VISIBLE while the vehicle waits is tracked continuously, so a long
+    # *stop* alone never triggers this bound.
+    cross_plate_merge_gap_ms: int = 90_000,
 ) -> list[VehicleEventResult]:
     """Merge split vehicle tracks and publish only evidence-backed events."""
 
@@ -608,9 +616,12 @@ def consolidate_vehicle_events(
             continue
         consolidated.append(event)
 
-    # Product rule for an uploaded video: one normalized plate produces one row.
-    # Keep the strongest evidence crop even when the tracker split the same plate
-    # into events separated by more than the normal temporal cooldown.
+    # One normalized plate → one row, but ONLY for the same continuous pass: merge same-plate
+    # events that are close in time (a tracker split or brief occlusion). Two appearances of the
+    # same string far apart in the video are SEPARATE passes — a returning bike, or two different
+    # bikes whose plates were misread to the same text. Merging those would silently drop one real
+    # vehicle, turning its stretch of video into a false "missed" gap and losing its evidence, so
+    # they are kept as distinct events. `plate_index` tracks the most recent row per plate.
     unique_events: list[VehicleEventResult] = []
     plate_index: dict[str, int] = {}
     for event in sorted(consolidated, key=lambda item: item.start_timestamp_ms):
@@ -618,6 +629,23 @@ def consolidate_vehicle_events(
             unique_events.append(event)
             continue
         match_index = plate_index.get(event.normalized_plate)
+        if match_index is not None and (
+            event.start_timestamp_ms - unique_events[match_index].end_timestamp_ms
+            > cross_plate_merge_gap_ms
+        ):
+            # Too far apart to be the same pass — keep as a separate event, but flag BOTH the
+            # earlier and this occurrence so a reviewer verifies they are genuinely distinct
+            # passes and not one vehicle wrongly split (or two vehicles misread to one plate).
+            earlier = unique_events[match_index]
+            unique_events[match_index] = replace(
+                earlier,
+                quality_flags=tuple(sorted({*earlier.quality_flags, "REPEATED_PLATE"})),
+            )
+            event = replace(
+                event,
+                quality_flags=tuple(sorted({*event.quality_flags, "REPEATED_PLATE"})),
+            )
+            match_index = None
         if match_index is None:
             plate_index[event.normalized_plate] = len(unique_events)
             unique_events.append(event)
@@ -644,6 +672,9 @@ def consolidate_vehicle_events(
         if combined_plate_count >= 2 and (best_source.confidence or 0) >= 0.75:
             classification = EventClassification.RECOGNIZED
             flags.discard("SINGLE_READING_OCR")
+        # Merged fragments belong to ONE continuous pass (bounded by cross_plate_merge_gap_ms), so
+        # spanning their windows min→max is a tight, correct range — it marks the whole presence
+        # for the timeline and video↔list sync without the old cross-video over-merge blowing it up.
         unique_events[match_index] = replace(
             best_source,
             track_code=previous.track_code,

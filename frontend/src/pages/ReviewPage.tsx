@@ -133,7 +133,13 @@ function isRiskyRead(event: EventResult): boolean {
 // the plate is fine but the two AIs disagreed on the quality CATEGORY (a human must pick it, so
 // an auto-verified case never silently carries an empty classification).
 function needsReview(event: EventResult): boolean {
-  return isRiskyRead(event) || event.quality_flags.includes("QUALITY_DISAGREEMENT");
+  return (
+    isRiskyRead(event) ||
+    event.quality_flags.includes("QUALITY_DISAGREEMENT") ||
+    // The same plate string appears again far apart in the video — a human must confirm it is a
+    // real re-entry (or two vehicles), not one vehicle wrongly split into duplicate rows.
+    event.quality_flags.includes("REPEATED_PLATE")
+  );
 }
 
 // Turn the internal engine flags into plain Vietnamese the reviewer can act on. Flags not in
@@ -143,6 +149,7 @@ const FLAG_META: Record<string, { label: string; tone: "warn" | "info" | "ok" }>
   SINGLE_READING_OCR: { label: "Chỉ đọc được 1 khung hình", tone: "warn" },
   OCR_DISAGREEMENT: { label: "AI đọc lệch model", tone: "warn" },
   SUSPECTED_NON_PLATE: { label: "Nghi KHÔNG phải biển (logo/đèn?)", tone: "warn" },
+  REPEATED_PLATE: { label: "Biển trùng lượt khác — kiểm tra", tone: "warn" },
   QUALITY_DISAGREEMENT: { label: "Phân loại chưa chắc", tone: "warn" },
   OCR_UNVERIFIED: { label: "Chưa kiểm chéo được", tone: "info" },
   OCR_AGREE: { label: "AI khớp model", tone: "ok" },
@@ -165,6 +172,31 @@ function friendlyFlags(flags: string[]) {
   return flags
     .filter((flag) => flag in FLAG_META && !hidden.has(flag))
     .map((flag) => ({ flag, ...FLAG_META[flag] }));
+}
+
+// Which track corresponds to a moment in the video. Among events whose window COVERS the time,
+// pick the TIGHTEST one — an over-merged plate can span minutes and would otherwise shadow the
+// short pass that actually matches. If nothing covers the time (a gap), pick the nearest event
+// so clicking anywhere on the bar still lands on a real plate.
+function trackIdForTime(events: EventResult[], ms: number): string | null {
+  if (events.length === 0) return null;
+  const covering = events.filter(
+    (event) => ms >= event.start_timestamp_ms && ms <= event.end_timestamp_ms,
+  );
+  if (covering.length > 0) {
+    return covering.reduce((best, event) =>
+      event.end_timestamp_ms - event.start_timestamp_ms <
+      best.end_timestamp_ms - best.start_timestamp_ms
+        ? event
+        : best,
+    ).track_id;
+  }
+  const gap = (event: EventResult) =>
+    Math.min(
+      Math.abs(event.start_timestamp_ms - ms),
+      Math.abs(event.end_timestamp_ms - ms),
+    );
+  return events.reduce((best, event) => (gap(event) < gap(best) ? event : best)).track_id;
 }
 
 // The consensus card: shows the local model + the two AI readers side by side with one clear
@@ -254,6 +286,11 @@ export function ReviewPage({ job }: { job: Job }) {
   } | null>(null);
   const [videoMs, setVideoMs] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const trackListRef = useRef<HTMLDivElement>(null);
+  // A manual pick (list click / prev-next) wins for a moment so the playback-follow effect can't
+  // yank the selection back — a video seek snaps to the nearest keyframe, which can land just
+  // before the track's window, where an over-merged wide window would otherwise re-capture it.
+  const manualSelectUntil = useRef(0);
   const [showMissed, setShowMissed] = useState(false);
 
   useEffect(() => {
@@ -275,18 +312,24 @@ export function ReviewPage({ job }: { job: Job }) {
     return () => clearTimeout(timer);
   }, [results]);
 
-  // Two-way sync: while the video plays/seeks, auto-select the track whose time window covers the
-  // current position so the left-column crop follows what's on screen.
+  // Two-way sync: while the video plays/seeks, auto-select the track that matches the current
+  // position (tightest covering window, else nearest) so the left-column crop follows the screen.
   useEffect(() => {
     if (evidenceTab !== "video" || !results) return;
-    const containing = results.events.find(
-      (event) =>
-        videoMs >= event.start_timestamp_ms && videoMs <= event.end_timestamp_ms,
-    );
-    if (containing && containing.track_id !== selectedId) {
-      setSelectedId(containing.track_id);
+    if (Date.now() < manualSelectUntil.current) return; // a fresh manual pick must not be undone
+    const id = trackIdForTime(results.events, videoMs);
+    if (id && id !== selectedId) {
+      setSelectedId(id);
     }
   }, [videoMs, evidenceTab, results, selectedId]);
+
+  // Keep the selected plate visible: whenever the selection changes (click, playback-follow,
+  // or timeline seek), smoothly scroll the left list so the corresponding crop is on screen.
+  useEffect(() => {
+    if (!selectedId || !trackListRef.current) return;
+    const item = trackListRef.current.querySelector(`[data-track-id="${selectedId}"]`);
+    item?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [selectedId]);
 
   useEffect(() => {
     api<GroundTruthList>(`/api/v1/jobs/${job.id}/ground-truth`)
@@ -372,13 +415,21 @@ export function ReviewPage({ job }: { job: Job }) {
   function seekFromClick(event: React.MouseEvent<HTMLDivElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    seekVideo(ratio * totalMs);
+    const ms = ratio * totalMs;
+    seekVideo(ms);
+    // Snap the left list to the plate for THIS part of the video, so clicking anywhere on the
+    // bar (including a gap) always lands on a real plate instead of leaving the list unchanged.
+    const id = trackIdForTime(results?.events ?? [], ms);
+    if (id) {
+      setSelectedId(id);
+    }
   }
 
   // Explicit user pick (list click / prev-next): show the video and jump it to this track's
   // start. This is the ONLY path that seeks on selection — playback-follow selection (the
   // videoMs effect) must never seek, or it would yank the playhead back every frame.
   function selectTrack(trackId: string, startMs: number) {
+    manualSelectUntil.current = Date.now() + 1500;
     setSelectedId(trackId);
     setEvidenceTab("video");
     if (videoRef.current) {
@@ -439,7 +490,6 @@ export function ReviewPage({ job }: { job: Job }) {
     ? filteredEvents.findIndex((event) => event.track_id === selected.track_id)
     : -1;
   const selectedGt = selected ? gtByTrack.get(selected.track_id) ?? null : null;
-  const suspected = results?.events.filter(isSuspectedNoPlate).length ?? 0;
   const selectedStartMs = selected?.start_timestamp_ms ?? 0;
 
   // Seek only when the evidence view switches TO video, reading the latest selected start from
@@ -483,14 +533,20 @@ export function ReviewPage({ job }: { job: Job }) {
             <Icon name="download" size={18} /> Export Excel
           </a>
         }
-        description={`${results.total} case model · ${results.counts.RECOGNIZED ?? 0} đọc được · ${
-          results.counts.NO_PLATE ?? 0
-        } không biển · ${suspected} nghi không biển`}
-        eyebrow={job.job_code}
+        eyebrow={`${job.vehicle_type === "car" ? "Ô tô" : "Xe máy"} · ${new Date(
+          job.created_at,
+        ).toLocaleDateString("vi-VN", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        })}`}
         title={job.source_name}
       />
 
-      <div className="review-actions card">
+      <section className="review-controls card">
+      <div className="review-actions">
         <div className="auto-verify">
           <label htmlFor="auto-th">Tự duyệt ≥</label>
           <input
@@ -538,8 +594,8 @@ export function ReviewPage({ job }: { job: Job }) {
       </div>
 
       {results.cross_check?.status === "done" && (
-        <div className="crosscheck-banner crosscheck-banner-done">
-          <Icon name="check" size={16} /> Đã kiểm chéo AI:{" "}
+        <div className="crosscheck-inline">
+          <Icon name="check" size={15} /> Đã kiểm chéo AI:{" "}
           <strong>{results.cross_check.auto_verified ?? 0}</strong> tự duyệt (3 nguồn khớp) ·{" "}
           <strong>{results.cross_check.disagree ?? 0}</strong> cần xem lại
           {(results.cross_check.unverified ?? 0) > 0 &&
@@ -547,7 +603,7 @@ export function ReviewPage({ job }: { job: Job }) {
         </div>
       )}
 
-      <div className="review-toolbar card">
+      <div className="review-toolbar">
         <label>
           <Icon name="search" size={18} />
           <input
@@ -575,6 +631,7 @@ export function ReviewPage({ job }: { job: Job }) {
           ))}
         </div>
       </div>
+      </section>
 
       {selected ? (
         <div className="review-grid">
@@ -586,10 +643,11 @@ export function ReviewPage({ job }: { job: Job }) {
               </div>
               <p>Mỗi track là một lượt xe do model tạo.</p>
             </header>
-            <div className="track-list">
+            <div className="track-list" ref={trackListRef}>
               {filteredEvents.map((event) => (
                 <button
                   className={`track-item ${event.track_id === selected.track_id ? "active" : ""}`}
+                  data-track-id={event.track_id}
                   key={event.track_id}
                   onClick={() => selectTrack(event.track_id, event.start_timestamp_ms)}
                   type="button"

@@ -23,8 +23,16 @@ in [`docs/18-lane9-gt-export-contract.md`](docs/18-lane9-gt-export-contract.md).
 2. `GT Plate` is human-entered or imported ground truth only.
 3. No evidence, no record: every exported row must resolve to its source video, timestamps, frame
    and stored crop/full-frame evidence.
-4. A normalized plate appears once per uploaded video/job. A better later frame may replace the
-   selected crop, but must not create another export row.
+4. One export row per continuous *pass* of a vehicle, not per plate string. When the tracker
+   splits a single pass into fragments (lost/re-acquired track a few seconds apart), merge them
+   into one row — a better later frame may replace the selected crop but must not create another
+   row. But the SAME normalized plate read again after a real detection gap (default > 90s) is a
+   SEPARATE pass — a vehicle that left and re-entered, or two different vehicles whose plates were
+   misread to the same string — and must stay its own row. Merging across a large gap would
+   silently drop a real vehicle into a false "missed" gap and lose its evidence, so it is forbidden.
+   Both such occurrences are flagged `REPEATED_PLATE` (surfaced in "Cần xem lại", never
+   auto-verified) so a human confirms they are genuinely distinct. The gap bound is
+   `cross_plate_merge_gap_ms` in `consolidate_vehicle_events`.
 5. A confirmed vehicle without a detected plate is still an event. Export its model value as
    `LPN_NO_PLATE_VEHICLE`.
 6. Do not fabricate GT, review state, confidence, camera data, or export history.

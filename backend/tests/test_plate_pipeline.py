@@ -108,6 +108,45 @@ def _single_read_event(plate_bbox: tuple[int, int, int, int]):
     return event
 
 
+def _plate_pass(start_ms: int, code: str = "29D187715"):
+    cc = (0.95,) * 9
+    obs = [
+        FrameObservation(
+            i,
+            start_ms + i * 250,
+            (150, 300, 700, 720),
+            0.9,
+            f"f{start_ms}_{i}.jpg",
+            "motorcycle",
+            (350, 450, 470, 542),
+            0.85,
+            None,
+            PlateReading(code, 0.9, cc),
+            0.9,
+        )
+        for i in range(4)
+    ]
+    return finalize_vehicle_track(VehicleTrack(f"V{start_ms}", obs))
+
+
+def test_same_plate_far_apart_stays_two_events() -> None:
+    # The same string read minutes apart is two separate passes (returning bike / misread
+    # collision). Merging them would drop one real vehicle into a false "missed" gap.
+    far = consolidate_vehicle_events([_plate_pass(58_000), _plate_pass(574_000)])
+    assert len(far) == 2
+    # Both are flagged so a human confirms they are genuinely distinct passes.
+    assert all("REPEATED_PLATE" in event.quality_flags for event in far)
+
+
+def test_same_plate_close_merges_into_one_spanning_event() -> None:
+    # A tracker split of ONE continuous pass (10s apart) still collapses to a single row whose
+    # window spans the whole presence.
+    close = consolidate_vehicle_events([_plate_pass(58_000), _plate_pass(68_000)])
+    assert len(close) == 1
+    assert close[0].start_timestamp_ms == 58_000
+    assert close[0].end_timestamp_ms == 68_750
+
+
 def test_single_frame_wide_floor_line_read_is_dropped() -> None:
     # aspect ~4 (337x85) — a floor lane-marking the detector mis-read as a plate.
     event = _single_read_event((100, 600, 437, 685))
