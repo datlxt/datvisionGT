@@ -459,6 +459,8 @@ def auto_verify_ground_truth(
             # Same plate appears again elsewhere — a human confirms it's a distinct pass, not a
             # duplicate/misread, before it becomes GT.
             or "REPEATED_PLATE" in event.quality_flags
+            # Military/diplomatic plate the OCR wasn't trained on — never auto-verify.
+            or "SPECIAL_PLATE" in event.quality_flags
             or (event.quality_score is not None and event.quality_score < 0.55)
         ):
             continue
@@ -482,13 +484,33 @@ def auto_verify_ground_truth(
     return AutoVerifyResponse(verified=verified, min_confidence=payload.min_confidence)
 
 
-def auto_verify_unanimous(job_id: uuid.UUID, session: Session) -> int:
-    """Fast-track only the SAFEST cases: those where every reader (local + AI-1 + AI-2)
-    unanimously read the same plate. Runs automatically after the background cross-check so the
-    reviewer only has to touch the cases that actually disagree. Returns the count verified.
+def _consensus_plate(event: EventResult) -> str | None:
+    """The plate a MAJORITY (≥2 of local + AI-1 + AI-2) read, grammar-normalized — or None if the
+    three readers are split (each its own answer). Used to auto-fill the agreed value."""
 
-    Safe because it needs the LOCAL model to agree too (never AI alone), and a human can always
-    change any auto-verified value later.
+    from collections import Counter
+
+    from app.vision.plate.domain import plate_key
+
+    keys = [
+        plate_key(text)
+        for text in (event.normalized_plate, event.cloud_plate, event.qwen_plate)
+        if text
+    ]
+    if not keys:
+        return None
+    value, count = Counter(keys).most_common(1)[0]
+    return value if count >= 2 and 2 * count > len(keys) else None
+
+
+def auto_verify_unanimous(job_id: uuid.UUID, session: Session) -> int:
+    """Fast-track every case where a MAJORITY of readers (≥2 of local + AI-1 + AI-2) agree on the
+    plate — 2/3 is trusted, so the reviewer only has to touch the cases that are genuinely split
+    (each reader a different answer). The agreed value wins even if the local model was the odd
+    one out. Runs automatically after the background cross-check. Returns the count verified.
+
+    A human can always change any auto-verified value later; the case still carries a light
+    OCR_AGREE flag so it can be double-checked.
     """
 
     job, events = _load_results(job_id, session)
@@ -496,16 +518,18 @@ def auto_verify_unanimous(job_id: uuid.UUID, session: Session) -> int:
     reviewer = gt.get_or_create_default_reviewer(session)
     verified = 0
     for event in events:
+        consensus = _consensus_plate(event)
         if (
-            "OCR_UNANIMOUS" not in event.quality_flags
-            or event.classification != "RECOGNIZED"
+            "OCR_AGREE" not in event.quality_flags  # ≥2 of 3 readers agree (incl. unanimous)
             or not event.normalized_plate
-            # Only fully-resolved cases are auto-verified: if the two AIs disagree on the plate
-            # QUALITY category, keep it in "Cần xem lại" so a human picks the category — otherwise
-            # a verified case would silently carry an empty classification and be missed.
+            or consensus is None
+            # If the two AIs disagree on the plate QUALITY category, keep it in "Cần xem lại" so a
+            # human picks the category — the plate is agreed but the category still needs a person.
             or "QUALITY_DISAGREEMENT" in event.quality_flags
-            # Same plate seen again elsewhere — a human confirms it's a real distinct pass first.
+            # Same plate seen again elsewhere, or a special (military/diplomatic) plate — a human
+            # confirms those first.
             or "REPEATED_PLATE" in event.quality_flags
+            or "SPECIAL_PLATE" in event.quality_flags
         ):
             continue
         record = session.scalar(
@@ -516,13 +540,18 @@ def auto_verify_unanimous(job_id: uuid.UUID, session: Session) -> int:
         )
         if record is None or record.verify_status == "VERIFIED":
             continue
-        gt.apply_edit(session, record, gt_text=event.normalized_plate, actor_id=reviewer.id)
+        gt.apply_edit(session, record, gt_text=consensus, actor_id=reviewer.id)
         # Also attach the plate-quality category when the two AIs + local signal AGREED on it
         # (QUALITY_AGREE). On disagreement the plate is still auto-verified but the category is
         # left blank for a human — we don't guess quality when the readers conflict.
         if "QUALITY_AGREE" in event.quality_flags and event.cloud_quality:
             record.classification = event.cloud_quality
-        record.quality_flags = sorted({*record.quality_flags, "AUTO_VERIFIED_UNANIMOUS"})
+        marker = (
+            "AUTO_VERIFIED_UNANIMOUS"
+            if "OCR_UNANIMOUS" in event.quality_flags
+            else "AUTO_VERIFIED_MAJORITY"
+        )
+        record.quality_flags = sorted({*record.quality_flags, marker})
         try:
             gt.apply_verify(session, record, reviewer=reviewer)
             verified += 1

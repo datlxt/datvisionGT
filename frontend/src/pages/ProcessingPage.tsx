@@ -40,6 +40,7 @@ export function ProcessingPage({
   const canRetry = ["FAILED", "CANCELLED"].includes(job.status);
   // Actively working: draft/queued/processing — the only states a cancel makes sense in.
   const running = !["WAITING_FOR_REVIEW", "COMPLETED", "FAILED", "CANCELLED"].includes(job.status);
+
   const stageIndex =
     job.current_stage === "RESULTS_READY" || ready
       ? 4

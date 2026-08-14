@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 from redis import Redis
@@ -19,6 +19,7 @@ from rq.job import Job as RqJob
 from rq.registry import FailedJobRegistry
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import get_settings
 from app.db.session import get_db
@@ -29,6 +30,30 @@ from app.workers.callbacks import mark_job_failed
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".m4v"}
 VEHICLE_TYPES = {"motorcycle", "car"}
+LANE_DIRECTIONS = {"up", "down", "left", "right"}
+
+
+class StartJobRequest(BaseModel):
+    """Optional per-lane setup captured on the config screen before processing starts."""
+
+    # Normalized [x1, y1, x2, y2] in 0..1 — restrict detection to one lane so the pipeline
+    # never fires on adjacent lanes / background.
+    roi: list[float] | None = None
+    # Travel direction of the lane; flags tracks moving against it for a human to check.
+    lane_direction: str | None = None
+
+
+def _sanitize_roi(roi: list[float] | None) -> list[float] | None:
+    """Clamp to 0..1 and order corners; reject a degenerate (too small) rectangle."""
+
+    if not roi or len(roi) != 4:
+        return None
+    x1, y1, x2, y2 = (max(0.0, min(1.0, float(v))) for v in roi)
+    x1, x2 = sorted((x1, x2))
+    y1, y2 = sorted((y1, y2))
+    if x2 - x1 < 0.02 or y2 - y1 < 0.02:
+        return None
+    return [round(x1, 4), round(y1, 4), round(x2, 4), round(y2, 4)]
 
 
 class JobResponse(BaseModel):
@@ -205,12 +230,29 @@ def get_job_source(
 
 
 @router.post("/{job_id}/start", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
-def start_job(job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)]) -> ProcessingJob:
+def start_job(
+    job_id: uuid.UUID,
+    session: Annotated[Session, Depends(get_db)],
+    payload: Annotated[StartJobRequest | None, Body()] = None,
+) -> ProcessingJob:
     job = session.get(ProcessingJob, job_id)
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
     if job.status != "DRAFT":
         raise HTTPException(status.HTTP_409_CONFLICT, f"Job cannot start from {job.status}")
+
+    # Per-lane ROI + direction drawn on the config screen. Stored so the worker restricts
+    # detection to this lane and flags wrong-direction tracks. Absent → pipeline default (no
+    # change for lanes configured without them).
+    if payload is not None:
+        config = dict(job.config_snapshot or {})
+        roi = _sanitize_roi(payload.roi)
+        if roi is not None:
+            config["roi"] = roi
+        if payload.lane_direction in LANE_DIRECTIONS:
+            config["lane_direction"] = payload.lane_direction
+        job.config_snapshot = config
+        flag_modified(job, "config_snapshot")
 
     settings = get_settings()
     queue = Queue(settings.rq_queue, connection=Redis.from_url(settings.redis_url))

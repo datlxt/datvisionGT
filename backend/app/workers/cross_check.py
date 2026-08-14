@@ -22,7 +22,6 @@ from app.db.session import SessionLocal
 from app.models import Artifact, Detection, ProcessingJob, Track
 from app.models.recognition import RecognitionResult
 from app.vision.plate.cloud_ocr import (
-    local_quality_groups,
     quality_group,
     read_plate_openai,
     read_plate_qwen,
@@ -155,31 +154,20 @@ def run_cross_check(
                 and recognition.predicted_text
             ):
                 flags.append("SUSPECTED_NON_PLATE")
-            # (2) Quality cross-check. Two DIFFERENT-vendor AI labels are the primary check; the
-            # deterministic local signal is the fallback when only one AI answered.
-            groups = {
-                quality_group(r.quality)
-                for r in (gpt, qwen)
-                if r is not None and quality_group(r.quality)
-            }
-            if len(groups) >= 2:
-                flags.append("QUALITY_DISAGREEMENT")
-            elif groups:
-                (cloud_group,) = groups
-                # Only when EVERY reader agreed (unanimous) is the local per-character doubt truly
-                # resolved — then don't let WEAK_CHARACTER force a false quality conflict. A 2/3
-                # majority on a hard plate keeps the doubt.
-                signal_flags = (
-                    [f for f in flags if f != "WEAK_CHARACTER"]
-                    if "OCR_UNANIMOUS" in flags
-                    else flags
-                )
-                local_groups = local_quality_groups(
-                    track.classification, signal_flags, vehicle.quality_score
-                )
+            # (2) Quality cross-check. Only the two AIs actually classify the plate quality (the
+            # local model has no quality label), so this is a two-reader check: both agree → take
+            # it (auto-filled); they differ → flag it, and the reviewer confirms the pre-filled
+            # AI-1 suggestion with one click.
+            gpt_group = quality_group(gpt.quality) if gpt and gpt.quality else None
+            qwen_group = quality_group(qwen.quality) if qwen and qwen.quality else None
+            if gpt_group and qwen_group:
                 flags.append(
-                    "QUALITY_AGREE" if cloud_group in local_groups else "QUALITY_DISAGREEMENT"
+                    "QUALITY_AGREE" if gpt_group == qwen_group else "QUALITY_DISAGREEMENT"
                 )
+            elif gpt_group or qwen_group:
+                # Only one AI answered — trust its single label (nothing to disagree with).
+                flags.append("QUALITY_AGREE")
+                raw["cloud_quality"] = gpt_group or qwen_group
         raw["quality_flags"] = flags
         vehicle.raw_output = raw
         flag_modified(vehicle, "raw_output")

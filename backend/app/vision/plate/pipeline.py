@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 import numpy as np
@@ -47,6 +47,9 @@ class RearCameraConfig:
     min_recognized_readings: int = 2
     recognized_threshold: float = 0.75
     orphan_plate_threshold: float = 0.60
+    # Lane travel direction ("up"/"down"/"left"/"right") or None. Only flags wrong-direction
+    # tracks for review; never drops a real vehicle.
+    lane_direction: str | None = None
 
 
 def _center_in_region(
@@ -78,13 +81,39 @@ class MotorcyclePlatePipeline:
         self.config = config or RearCameraConfig()
         self.tracker = tracker or GreedyVehicleTracker()
 
-    def run(self, frames: Iterable[PipelineFrame]) -> list[VehicleEventResult]:
+    def run(
+        self,
+        frames: Iterable[PipelineFrame],
+        on_frame: "Callable[[PipelineFrame, list[FrameObservation], int], None] | None" = None,
+        on_event: "Callable[[VehicleEventResult], None] | None" = None,
+    ) -> list[VehicleEventResult]:
         results: list[VehicleEventResult] = []
+
+        def _finish(track) -> None:
+            event = self._finalize(track)
+            results.append(event)
+            # A vehicle just finished its pass — hand its (provisional, pre-consolidation) event to
+            # the caller so the live list can show it the moment it passes. The observational hooks
+            # must NEVER be able to crash the pipeline, so failures are swallowed.
+            if on_event is not None:
+                try:
+                    on_event(event)
+                except Exception:
+                    pass
+
         for frame in frames:
             observations = self._observe(frame)
             for track in self.tracker.update(observations, frame.timestamp_ms):
-                results.append(self._finalize(track))
-        results.extend(self._finalize(track) for track in self.tracker.flush())
+                _finish(track)
+            # Optional live hook: hand the raw per-frame detections + running vehicle count to the
+            # caller (the worker renders a "live" annotated preview). Purely observational.
+            if on_frame is not None:
+                try:
+                    on_frame(frame, observations, self.tracker._next_id - 1)
+                except Exception:
+                    pass
+        for track in self.tracker.flush():
+            _finish(track)
         return consolidate_vehicle_events(results)
 
     def _observe(self, frame: PipelineFrame) -> list[FrameObservation]:
@@ -185,4 +214,5 @@ class MotorcyclePlatePipeline:
             min_no_plate_observations=self.config.min_no_plate_observations,
             min_recognized_readings=self.config.min_recognized_readings,
             recognized_threshold=self.config.recognized_threshold,
+            lane_direction=self.config.lane_direction,
         )

@@ -1,6 +1,7 @@
 import {
   type ChangeEvent,
   type DragEvent,
+  type PointerEvent,
   type ReactNode,
   useEffect,
   useRef,
@@ -64,6 +65,40 @@ export function CreateJobPage({
   const [dragging, setDragging] = useState(false);
   const [vehicleType, setVehicleType] = useState<"motorcycle" | "car">(initialVehicleType);
   const [message, setMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  const roiVideoRef = useRef<HTMLVideoElement>(null);
+  const [roi, setRoi] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const [laneDirection, setLaneDirection] = useState<"" | "up" | "down" | "left" | "right">("");
+  const roiDragStart = useRef<{ x: number; y: number } | null>(null);
+
+  function roiPoint(event: PointerEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
+    };
+  }
+
+  function roiDown(event: PointerEvent<HTMLDivElement>) {
+    const point = roiPoint(event);
+    roiDragStart.current = point;
+    setRoi({ x1: point.x, y1: point.y, x2: point.x, y2: point.y });
+  }
+
+  function roiMove(event: PointerEvent<HTMLDivElement>) {
+    if (!roiDragStart.current) return;
+    const point = roiPoint(event);
+    const start = roiDragStart.current;
+    setRoi({
+      x1: Math.min(start.x, point.x),
+      y1: Math.min(start.y, point.y),
+      x2: Math.max(start.x, point.x),
+      y2: Math.max(start.y, point.y),
+    });
+  }
+
+  function roiUp() {
+    roiDragStart.current = null;
+  }
 
   useEffect(
     () => () => {
@@ -78,6 +113,8 @@ export function CreateJobPage({
     setPreview(selected ? URL.createObjectURL(selected) : null);
     setDraft(null);
     setMessage(null);
+    setRoi(null);
+    setLaneDirection("");
   }
 
   function chooseFile(event: ChangeEvent<HTMLInputElement>) {
@@ -142,6 +179,11 @@ export function CreateJobPage({
       const currentDraft = draft ?? (await createDraft());
       const queued = await api<Job>(`/api/v1/jobs/${currentDraft.id}/start`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          roi: roi ? [roi.x1, roi.y1, roi.x2, roi.y2] : null,
+          lane_direction: laneDirection || null,
+        }),
       });
       onStarted(queued);
     } catch (reason) {
@@ -324,23 +366,91 @@ export function CreateJobPage({
               </div>
             </div>
 
-            <div className="readonly-fields">
-              <label>
-                <span>Camera preset</span>
-                <div className="readonly-control">
-                  <Icon name="camera" size={18} />
-                  <strong>Camera sau · trạm vé</strong>
-                  <small>Cấu hình cố định phía server</small>
-                </div>
-              </label>
-              <label>
-                <span>Vùng quét</span>
-                <div className="readonly-control">
-                  <Icon name="scan" size={18} />
-                  <strong>ROI cố định của pipeline</strong>
-                  <small>Chưa có API chọn ROI</small>
-                </div>
-              </label>
+            <div className="roi-config">
+              <div className="roi-config-head">
+                <h3>Vùng quét (ROI) &amp; hướng làn</h3>
+                <p>Khoanh đúng làn để pipeline không bắt nhầm sang làn khác / nền / đèn.</p>
+              </div>
+              {preview ? (
+                <>
+                  <div
+                    className="roi-stage"
+                    onPointerDown={roiDown}
+                    onPointerMove={roiMove}
+                    onPointerUp={roiUp}
+                    onPointerLeave={roiUp}
+                  >
+                    <video muted playsInline preload="metadata" ref={roiVideoRef} src={preview} />
+                    {roi && (
+                      <div
+                        className="roi-rect"
+                        style={{
+                          left: `${roi.x1 * 100}%`,
+                          top: `${roi.y1 * 100}%`,
+                          width: `${(roi.x2 - roi.x1) * 100}%`,
+                          height: `${(roi.y2 - roi.y1) * 100}%`,
+                        }}
+                      />
+                    )}
+                    <span className="roi-hint">Kéo chuột để khoanh vùng quét</span>
+                  </div>
+                  <label className="roi-seek">
+                    <span>Thời điểm ảnh nền</span>
+                    <input
+                      aria-label="Thời điểm ảnh nền"
+                      defaultValue={0}
+                      max={100}
+                      min={0}
+                      onChange={(event) => {
+                        const video = roiVideoRef.current;
+                        if (video && video.duration) {
+                          video.currentTime = (Number(event.target.value) / 100) * video.duration;
+                        }
+                      }}
+                      type="range"
+                    />
+                  </label>
+                  <div className="roi-controls">
+                    <label>
+                      <span>Hướng làn</span>
+                      <select
+                        onChange={(event) =>
+                          setLaneDirection(event.target.value as typeof laneDirection)
+                        }
+                        value={laneDirection}
+                      >
+                        <option value="">Không đặt · quét cả khung</option>
+                        <option value="down">Xe đi xuống (vào từ mép trên)</option>
+                        <option value="up">Xe đi lên (vào từ mép dưới)</option>
+                        <option value="right">Xe đi sang phải</option>
+                        <option value="left">Xe đi sang trái</option>
+                      </select>
+                    </label>
+                    <div className="roi-readout">
+                      <span>ROI</span>
+                      {roi ? (
+                        <code>
+                          {roi.x1.toFixed(3)}, {roi.y1.toFixed(3)}, {roi.x2.toFixed(3)},{" "}
+                          {roi.y2.toFixed(3)}
+                        </code>
+                      ) : (
+                        <em>chưa vẽ — quét cả khung</em>
+                      )}
+                      {roi && (
+                        <button
+                          className="button button-secondary button-compact"
+                          onClick={() => setRoi(null)}
+                          type="button"
+                        >
+                          Xoá
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p className="roi-empty">Chọn video ở bước 1 để vẽ vùng quét.</p>
+              )}
             </div>
           </section>
 
@@ -460,7 +570,15 @@ export function CreateJobPage({
               <dt>
                 <Icon name="scan" size={18} /> Vùng quét
               </dt>
-              <dd>ROI cố định</dd>
+              <dd>
+                {roi ? "ROI tuỳ chỉnh" : "Cả khung"}
+                {laneDirection &&
+                  ` · ${
+                    { down: "đi xuống", up: "đi lên", right: "sang phải", left: "sang trái" }[
+                      laneDirection
+                    ]
+                  }`}
+              </dd>
             </div>
             <div>
               <dt>

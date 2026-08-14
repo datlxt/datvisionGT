@@ -22,7 +22,10 @@ class Settings(BaseSettings):
     model_root: Path = Path("/app/models")
     cors_origins: str = "http://localhost:5173"
     max_upload_bytes: int = 2 * 1024 * 1024 * 1024
-    model_intra_op_threads: int = 4
+    # These models (YOLOX-tiny, YOLOv9-T, CCT-XS) are small — more intra-op threads only add
+    # scheduling overhead and run SLOWER. Measured: 2 threads ≈ 1.5× faster than 4. The spare
+    # cores are better used by running FRAMES in parallel (see the pipeline worker pool).
+    model_intra_op_threads: int = 2
     vehicle_model_path: str = "vehicle/yolox_tiny.onnx"
     plate_detector_model_path: str = (
         "plate-detector/yolo-v9-t-512-license-plates-end2end.onnx"

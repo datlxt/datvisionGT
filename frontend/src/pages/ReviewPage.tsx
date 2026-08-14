@@ -111,20 +111,17 @@ function classificationTone(event: EventResult) {
 // missed plate). All of these land together in the yellow "Cần xem lại" bucket, on the tab, and
 // on the video timeline — regardless of the % score.
 function isRiskyRead(event: EventResult): boolean {
-  // Only a UNANIMOUS cross-check (every reader read the same plate) clears the local per-character
-  // doubt. A mere 2/3 majority on a hard plate can be two readers making the SAME wrong read
-  // (89M1… misread as 89H… by local+AI-2 while AI-1 dissented) — so a dissenter keeps it risky.
-  const confirmed = event.quality_flags.includes("OCR_UNANIMOUS");
+  // A MAJORITY cross-check (≥2 of local + AI-1 + AI-2 agree) is trusted — the agreed value is
+  // auto-filled and the reader doubt is cleared. Only when the readers are genuinely SPLIT
+  // (OCR_DISAGREEMENT — each a different answer) does a human have to decide the read.
+  if (event.quality_flags.includes("OCR_AGREE")) return false;
   return (
     event.classification === "LOW_CONFIDENCE" ||
     event.classification === "UNREADABLE" ||
     event.classification === "NO_PLATE" ||
-    (!confirmed && event.quality_flags.includes("WEAK_CHARACTER")) ||
-    (!confirmed && event.quality_flags.includes("SINGLE_READING_OCR")) ||
-    // Readers split (no majority) OR a 2/3 majority with a dissenting reader — either way not
-    // everyone agreed, so a human must decide (dissent on a hard plate = likely a wrong read).
+    event.quality_flags.includes("WEAK_CHARACTER") ||
+    event.quality_flags.includes("SINGLE_READING_OCR") ||
     event.quality_flags.includes("OCR_DISAGREEMENT") ||
-    (event.quality_flags.includes("OCR_AGREE") && !confirmed) ||
     (event.quality_score ?? 1) < 0.5
   );
 }
@@ -138,21 +135,27 @@ function needsReview(event: EventResult): boolean {
     event.quality_flags.includes("QUALITY_DISAGREEMENT") ||
     // The same plate string appears again far apart in the video — a human must confirm it is a
     // real re-entry (or two vehicles), not one vehicle wrongly split into duplicate rows.
-    event.quality_flags.includes("REPEATED_PLATE")
+    event.quality_flags.includes("REPEATED_PLATE") ||
+    // Travelled against the lane direction — likely an adjacent-lane clip or mis-association.
+    event.quality_flags.includes("WRONG_DIRECTION") ||
+    // Special (military/diplomatic) plate the OCR wasn't trained on — always human-verified.
+    event.quality_flags.includes("SPECIAL_PLATE")
   );
 }
 
 // Turn the internal engine flags into plain Vietnamese the reviewer can act on. Flags not in
 // this map (dedup / motion bookkeeping) are hidden — they are noise for a human reviewer.
 const FLAG_META: Record<string, { label: string; tone: "warn" | "info" | "ok" }> = {
-  WEAK_CHARACTER: { label: "Ký tự bị che / chói", tone: "warn" },
-  SINGLE_READING_OCR: { label: "Chỉ đọc được 1 khung hình", tone: "warn" },
-  OCR_DISAGREEMENT: { label: "AI đọc lệch model", tone: "warn" },
-  SUSPECTED_NON_PLATE: { label: "Nghi KHÔNG phải biển (logo/đèn?)", tone: "warn" },
-  REPEATED_PLATE: { label: "Biển trùng lượt khác — kiểm tra", tone: "warn" },
-  QUALITY_DISAGREEMENT: { label: "Phân loại chưa chắc", tone: "warn" },
-  OCR_UNVERIFIED: { label: "Chưa kiểm chéo được", tone: "info" },
-  OCR_AGREE: { label: "AI khớp model", tone: "ok" },
+  WEAK_CHARACTER: { label: "Ký tự mờ/che", tone: "warn" },
+  SINGLE_READING_OCR: { label: "Đọc 1 khung", tone: "warn" },
+  OCR_DISAGREEMENT: { label: "AI đọc lệch", tone: "warn" },
+  SUSPECTED_NON_PLATE: { label: "Nghi không phải biển", tone: "warn" },
+  REPEATED_PLATE: { label: "Biển trùng lượt", tone: "warn" },
+  WRONG_DIRECTION: { label: "Ngược hướng", tone: "warn" },
+  SPECIAL_PLATE: { label: "Biển đặc biệt", tone: "warn" },
+  QUALITY_DISAGREEMENT: { label: "Phân loại lệch", tone: "warn" },
+  OCR_UNVERIFIED: { label: "Chưa kiểm chéo", tone: "info" },
+  OCR_AGREE: { label: "AI khớp", tone: "ok" },
   QUALITY_AGREE: { label: "Phân loại khớp", tone: "ok" },
 };
 
@@ -217,23 +220,15 @@ function CrossCheckCard({ event }: { event: EventResult }) {
   const agree = event.quality_flags.includes("OCR_AGREE");
   const nonPlate = event.quality_flags.includes("SUSPECTED_NON_PLATE");
   const verdict = unverified
-    ? { cls: "info", icon: "clock" as const, text: "Chưa kiểm chéo được (mạng / AI lỗi) — thử lại sau." }
+    ? { cls: "info", icon: "clock" as const, text: "Chưa kiểm chéo được." }
     : nonPlate
-      ? {
-          cls: "diff",
-          icon: "alert" as const,
-          text: "Cả 2 AI đều KHÔNG thấy biển — nghi là logo / đèn / vật khác, không phải biển. Nên Loại.",
-        }
+      ? { cls: "diff", icon: "alert" as const, text: "2 AI không thấy biển — nghi logo/đèn, nên Loại." }
       : disagree
-      ? { cls: "diff", icon: "alert" as const, text: "Các nguồn đọc KHÁC nhau — nhìn kỹ crop rồi chọn biển đúng." }
+      ? { cls: "diff", icon: "alert" as const, text: "3 nguồn đọc KHÁC nhau — chọn biển đúng." }
       : unanimous
-        ? { cls: "same", icon: "check" as const, text: "Cả 3 nguồn cùng đọc một biển — đáng tin." }
+        ? { cls: "same", icon: "check" as const, text: "3 nguồn khớp — đáng tin." }
         : agree
-          ? {
-              cls: "diff",
-              icon: "alert" as const,
-              text: "Đa số đọc giống nhưng CÓ nguồn khác — biển khó, soi kỹ crop trước khi tin.",
-            }
+          ? { cls: "warn", icon: "check" as const, text: "2/3 khớp — đã lấy, xem lại nếu cần." }
           : { cls: "info", icon: "eye" as const, text: "Đã đối chiếu AI." };
 
   return (
@@ -1142,11 +1137,9 @@ function GtPanel({
 }) {
   const [gtText, setGtText] = useState(record?.gt_text ?? record?.predicted_text ?? "");
   const [note, setNote] = useState(record?.note ?? "");
-  // Prefill the category with the AI + local-signal agreed label (when the reviewer hasn't set
-  // one and the two evaluators did NOT disagree); the reviewer can still change it.
-  const [quality, setQuality] = useState(
-    record?.classification ?? (qualityDisagree ? "" : cloudQuality ?? ""),
-  );
+  // Prefill the category with AI-1's label as a SUGGESTION even when the two AIs disagree — the
+  // reviewer just confirms it with one click (or changes it), never has to type from scratch.
+  const [quality, setQuality] = useState(record?.classification ?? cloudQuality ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -1223,14 +1216,14 @@ function GtPanel({
           {qualityDisagree ? (
             qwenQuality && qwenQuality !== cloudQuality ? (
               <>
-                ⚠ 2 AI phân loại KHÁC nhau — AI-1: <strong>{cloudQuality}</strong> · AI-2:{" "}
-                <strong>{qwenQuality}</strong>. Bạn nhìn crop chọn giúp.
+                ⚠ 2 AI lệch — AI-1: <strong>{cloudQuality}</strong> · AI-2:{" "}
+                <strong>{qwenQuality}</strong>. Đã điền AI-1, đổi nếu cần.
               </>
             ) : (
-              `⚠ AI phân loại "${cloudQuality}" nhưng lệch với tín hiệu ảnh — bạn chọn giúp.`
+              `⚠ Phân loại chưa chắc — đã điền "${cloudQuality}", đổi nếu cần.`
             )
           ) : (
-            `AI + tín hiệu ảnh cùng đề xuất: "${cloudQuality}" (đã điền sẵn, sửa nếu cần).`
+            `Đề xuất: "${cloudQuality}" (đã điền, sửa nếu cần).`
           )}
         </p>
       ) : null}

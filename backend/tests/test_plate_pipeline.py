@@ -147,6 +147,37 @@ def test_same_plate_close_merges_into_one_spanning_event() -> None:
     assert close[0].end_timestamp_ms == 68_750
 
 
+def test_special_plates_accepted_without_finetune() -> None:
+    # Military (2 letters + block) and diplomatic/foreign plates must pass the grammar filter so a
+    # correct OCR read is not discarded — no model change needed.
+    assert is_plausible_vietnamese_plate("KA1234")  # quân đội
+    assert is_plausible_vietnamese_plate("BC12345")
+    assert is_plausible_vietnamese_plate("80NG12345")  # ngoại giao
+    assert is_plausible_vietnamese_plate("80NN123")  # nước ngoài, short block
+    # Civilian still valid; a non-plate string still rejected.
+    assert is_plausible_vietnamese_plate("29D128130")
+    assert not is_plausible_vietnamese_plate("ABCDEF")
+    # The civilian glyph repair must NOT corrupt a military plate ('A' would otherwise become '4').
+    assert plate_key("KA1234") == "KA1234"
+    # …but still repairs a civilian misread (trailing O in the number block → 0).
+    assert plate_key("29D12813O") == "29D128130"
+
+
+def test_wrong_direction_flag_only_when_direction_set() -> None:
+    # Vehicle travelling UP the frame (y decreasing) while the lane runs "down".
+    obs = [observation(i, vehicle_bbox=(300, 500 - i * 80, 460, 620 - i * 80)) for i in range(4)]
+    flagged = finalize_vehicle_track(VehicleTrack("V", obs), lane_direction="down")
+    assert "WRONG_DIRECTION" in flagged.quality_flags
+    # Same motion, no direction configured → never flagged (no change for lanes without it).
+    unset = finalize_vehicle_track(VehicleTrack("V", obs), lane_direction=None)
+    assert "WRONG_DIRECTION" not in unset.quality_flags
+    # Travelling the right way is not flagged.
+    down = [observation(i, vehicle_bbox=(300, 100 + i * 80, 460, 220 + i * 80)) for i in range(4)]
+    assert "WRONG_DIRECTION" not in finalize_vehicle_track(
+        VehicleTrack("V", down), lane_direction="down"
+    ).quality_flags
+
+
 def test_single_frame_wide_floor_line_read_is_dropped() -> None:
     # aspect ~4 (337x85) — a floor lane-marking the detector mis-read as a plate.
     event = _single_read_event((100, 600, 437, 685))

@@ -30,9 +30,13 @@ from app.vision.plate.yolox_vehicle import YoloXMotorcycleDetector
 from app.workers.evidence import EvidenceCancelled, process_evidence_job
 
 # COCO class ids + evidence label per selectable vehicle type. Same YOLOX-tiny model.
+# "motorcycle" mode also accepts COCO bicycle (1): plate-less e-bikes / scooters / bicycles are
+# frequently classified as bicycle, not motorcycle — without this they get no semantic detection,
+# fall back to motion-only, and are dropped as candidates (a real missed vehicle). "car" mode also
+# accepts bus (5) and truck (7) so larger vehicles in a car lane aren't missed either.
 _VEHICLE_COCO_CLASSES: dict[str, tuple[tuple[int, ...], str]] = {
-    "motorcycle": ((3,), "motorcycle"),
-    "car": ((2,), "car"),
+    "motorcycle": ((1, 3), "motorcycle"),
+    "car": ((2, 5, 7), "car"),
 }
 
 
@@ -177,10 +181,15 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
             class_ids, vehicle_label = _VEHICLE_COCO_CLASSES.get(
                 vehicle_type, _VEHICLE_COCO_CLASSES["motorcycle"]
             )
+            # Electric scooters / e-bikes are an unusual shape for COCO-trained YOLOX, so they
+            # score low even as a bicycle — a 0.35 gate drops them (a real missed vehicle). Use a
+            # lower gate for the two-wheeler mode to catch them; cars keep the stricter default.
+            vehicle_conf = 0.28 if vehicle_type == "motorcycle" else 0.35
             semantic_vehicle_detector = YoloXMotorcycleDetector(
                 vehicle_path,
                 vehicle_class_ids=class_ids,
                 label=vehicle_label,
+                confidence_threshold=vehicle_conf,
                 intra_op_threads=settings.model_intra_op_threads,
             )
             vehicle_detector = CompositeVehicleDetector(
@@ -193,15 +202,23 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
                 detection_threshold=settings.plate_detection_threshold,
                 intra_op_threads=settings.model_intra_op_threads,
             )
+            job_config = job.config_snapshot or {}
+            rear_config_kwargs: dict[str, Any] = dict(
+                min_no_plate_observations=settings.min_no_plate_observations,
+                min_recognized_readings=settings.min_recognized_readings,
+                orphan_plate_threshold=settings.orphan_plate_threshold,
+                lane_direction=job_config.get("lane_direction"),
+            )
+            # Per-lane ROI drawn on the config screen restricts detection to this lane. Absent →
+            # the RearCameraConfig default (full frame minus overlay corners).
+            roi_config = job_config.get("roi")
+            if isinstance(roi_config, list) and len(roi_config) == 4:
+                rear_config_kwargs["roi"] = tuple(float(v) for v in roi_config)
             pipeline = MotorcyclePlatePipeline(
                 vehicle_detector,
                 alpr,
                 alpr,
-                config=RearCameraConfig(
-                    min_no_plate_observations=settings.min_no_plate_observations,
-                    min_recognized_readings=settings.min_recognized_readings,
-                    orphan_plate_threshold=settings.orphan_plate_threshold,
-                ),
+                config=RearCameraConfig(**rear_config_kwargs),
             )
             frames = list(
                 session.scalars(

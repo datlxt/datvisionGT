@@ -63,10 +63,26 @@ def normalize_vietnamese_plate(text: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", text.upper())
 
 
-def is_plausible_vietnamese_plate(value: str) -> bool:
-    """Conservative MVP validator for normalized motorcycle/passenger plate text."""
+# Civilian motorcycle/passenger plate: province(2 digits) + series letter + 1 series char + block.
+_CIVILIAN_PLATE_RE = re.compile(r"\d{2}[A-Z][A-Z0-9]\d{4,5}")
+# Military (quân đội): two-letter unit code + 4-5 digit block (e.g. KA1234, BC12345) — RED plates,
+# NO province number. Diplomatic / foreign (ngoại giao NG, nước ngoài NN, quốc tế QT): province +
+# a two-letter marker + block (e.g. 80NG12345, 80NN123, 51QT4321). These are read fine by the OCR
+# character-by-character; only the civilian-only grammar filter was discarding them.
+_MILITARY_PLATE_RE = re.compile(r"[A-Z]{2}\d{4,5}")
+_DIPLOMATIC_PLATE_RE = re.compile(r"\d{2}(?:NG|NN|QT|CV|LD)\d{3,5}")
 
-    return bool(re.fullmatch(r"\d{2}[A-Z][A-Z0-9]\d{4,5}", value))
+
+def is_special_plate(value: str) -> bool:
+    """Military / diplomatic / foreign plate whose layout differs from the civilian grammar."""
+
+    return bool(_MILITARY_PLATE_RE.fullmatch(value) or _DIPLOMATIC_PLATE_RE.fullmatch(value))
+
+
+def is_plausible_vietnamese_plate(value: str) -> bool:
+    """Accept a civilian plate OR a special (military/diplomatic/foreign) plate layout."""
+
+    return bool(_CIVILIAN_PLATE_RE.fullmatch(value)) or is_special_plate(value)
 
 
 # Position-aware OCR confusion repair. A Vietnamese motorcycle plate is
@@ -104,6 +120,10 @@ def coerce_to_plate_grammar(value: str) -> str:
     """Repair cross-class OCR glyph swaps using the fixed plate layout classes."""
 
     if len(value) not in (8, 9):
+        return value
+    # A special (military/diplomatic) plate does not follow the civilian digit/letter layout —
+    # forcing it (e.g. the 'A' in a military 'KA…' → '4') would corrupt a correct read.
+    if is_special_plate(value):
         return value
     chars = list(value)
     chars[0] = _LETTER_TO_DIGIT.get(chars[0], chars[0])
@@ -213,6 +233,7 @@ def finalize_vehicle_track(
     min_recognized_readings: int = 2,
     recognized_threshold: float = 0.75,
     weak_character_threshold: float = 0.60,
+    lane_direction: str | None = None,
 ) -> VehicleEventResult:
     if not track.observations:
         raise ValueError("Cannot finalize an empty vehicle track")
@@ -308,6 +329,28 @@ def finalize_vehicle_track(
                 item.plate_confidence or 0,
             ),
         )
+
+    # A military / diplomatic plate is read by the same OCR but was not trained on (red plates,
+    # different layout), so surface it for a human instead of trusting it silently.
+    if normalized and is_special_plate(normalized):
+        flags.append("SPECIAL_PLATE")
+
+    # Lane direction check: a genuine pass travels the way the lane runs. A track whose net
+    # motion clearly OPPOSES the configured direction (moved more than ~0.75 of its own size the
+    # wrong way) is flagged for a human — an adjacent-lane vehicle clipping the edge, a reflection,
+    # or a mis-association. Only flags (never drops) so a real vehicle is never lost.
+    if lane_direction and len(track.observations) >= 2:
+        fv, lv = track.observations[0].vehicle_bbox, track.observations[-1].vehicle_bbox
+        dx = (lv[0] + lv[2]) / 2 - (fv[0] + fv[2]) / 2
+        dy = (lv[1] + lv[3]) / 2 - (fv[1] + fv[3]) / 2
+        vw, vh = max(1.0, fv[2] - fv[0]), max(1.0, fv[3] - fv[1])
+        if (
+            (lane_direction == "down" and dy < -0.75 * vh)
+            or (lane_direction == "up" and dy > 0.75 * vh)
+            or (lane_direction == "right" and dx < -0.75 * vw)
+            or (lane_direction == "left" and dx > 0.75 * vw)
+        ):
+            flags.append("WRONG_DIRECTION")
 
     first, last = track.observations[0], track.observations[-1]
     return VehicleEventResult(

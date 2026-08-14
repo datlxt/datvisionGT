@@ -306,9 +306,9 @@ code {
 .page-header h1 {
   margin: 0;
   color: var(--navy);
-  font-size: clamp(26px, 2.3vw, 36px);
-  letter-spacing: -0.045em;
-  line-height: 1.2;
+  font-size: clamp(21px, 1.8vw, 28px);
+  letter-spacing: -0.03em;
+  line-height: 1.25;
 }
 
 .page-description {
@@ -871,6 +871,123 @@ code {
   padding: 18px 22px;
 }
 
+/* ROI drawer on the create/config screen */
+.roi-config {
+  display: grid;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.roi-config-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.roi-config-head p {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.roi-empty {
+  padding: 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+
+.roi-stage {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #0a1520;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.roi-stage video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.roi-rect {
+  position: absolute;
+  border: 2px solid var(--blue);
+  background: rgba(36, 130, 239, 0.16);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
+.roi-hint {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: #cfe0f5;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+.roi-seek {
+  display: grid;
+  gap: 5px;
+}
+
+.roi-seek > span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.roi-seek input {
+  width: 100%;
+}
+
+.roi-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px;
+}
+
+.roi-controls label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.roi-controls select {
+  min-width: 240px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--navy);
+  background: #fff;
+}
+
+.roi-readout {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.roi-readout code {
+  font-size: 12px;
+  color: var(--navy);
+}
+
 .action-footer > p {
   max-width: 560px;
   margin: 0;
@@ -1287,73 +1404,90 @@ code {
 
 .case-timeline {
   position: relative;
-  height: 26px;
-  margin-top: 10px;
-  border-radius: 6px;
-  background: #e2e8f0;
+  height: 30px;
+  margin-top: 12px;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #eef2f7, #e3e9f1);
+  box-shadow:
+    inset 0 1px 2px rgba(15, 23, 42, 0.09),
+    inset 0 0 0 1px rgba(15, 23, 42, 0.05);
   cursor: pointer;
+  transition: box-shadow 0.15s ease;
+}
+
+.case-timeline:hover {
+  box-shadow:
+    inset 0 1px 2px rgba(15, 23, 42, 0.09),
+    inset 0 0 0 1px rgba(36, 130, 239, 0.28);
 }
 
 .case-timeline .ct-seg {
   position: absolute;
-  top: 3px;
-  height: 20px;
+  top: 4px;
+  height: 22px;
   border: 0;
-  border-radius: 3px;
+  border-radius: 5px;
   padding: 0;
   min-width: 3px;
   pointer-events: none;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
-/* Cross-check confirmed (all 3 readers agree) — strong solid green = trustworthy. */
+/* Cross-check confirmed (all 3 readers agree) — deep emerald = trustworthy. */
 .ct-verified {
-  background: #15803d;
+  background: linear-gradient(180deg, #23a95b, #15803d);
 }
 
 /* Read but not cross-check-confirmed yet — lighter green so it reads as "not final". */
 .ct-recognized {
-  background: #7cc79a;
+  background: linear-gradient(180deg, #96d9b0, #6cbf90);
 }
 
 .ct-low_confidence {
-  background: #f59e0b;
+  background: linear-gradient(180deg, #fbbf24, #f59e0b);
 }
 
-/* Occluded / weak-character reads the reviewer must double-check: brighter amber with a
-   striped overlay so they stand out from ordinary low-confidence bands on the timeline. */
+/* Occluded / weak-character reads the reviewer must double-check: amber with a soft fine
+   diagonal sheen so it reads as "look here" without the harsh high-contrast stripe. */
 .case-timeline .ct-seg.ct-risky {
-  background-image: repeating-linear-gradient(
-    45deg,
-    #f59e0b,
-    #f59e0b 3px,
-    #d97706 3px,
-    #d97706 6px
-  );
-  box-shadow: 0 0 0 1px #b45309;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.24) 0 2px,
+      rgba(255, 255, 255, 0) 2px 5px
+    ),
+    linear-gradient(180deg, #fbbf24, #ef9d0a);
+  box-shadow:
+    0 1px 2px rgba(180, 83, 9, 0.32),
+    inset 0 0 0 1px rgba(180, 83, 9, 0.32);
 }
 
 .ct-unreadable {
-  background: #f97316;
+  background: linear-gradient(180deg, #fb923c, #f97316);
 }
 
 .ct-no_plate {
-  background: #64748b;
+  background: linear-gradient(180deg, #7d8da3, #64748b);
 }
 
 .case-timeline .ct-gap {
   position: absolute;
-  top: 0;
-  height: 100%;
+  top: 4px;
+  height: 22px;
   border: 0;
+  border-radius: 5px;
   padding: 0;
   pointer-events: none;
   background: repeating-linear-gradient(
     45deg,
-    rgba(220, 38, 38, 0.55),
-    rgba(220, 38, 38, 0.55) 4px,
-    rgba(220, 38, 38, 0.2) 4px,
-    rgba(220, 38, 38, 0.2) 8px
+    rgba(244, 63, 94, 0.32),
+    rgba(244, 63, 94, 0.32) 3px,
+    rgba(244, 63, 94, 0.07) 3px,
+    rgba(244, 63, 94, 0.07) 7px
   );
+  box-shadow: inset 0 0 0 1px rgba(244, 63, 94, 0.28);
 }
 
 .ct-legend {
@@ -1404,39 +1538,53 @@ code {
 
 .case-timeline .ct-playhead {
   position: absolute;
-  top: -4px;
-  bottom: -4px;
-  width: 3px;
-  margin-left: -1.5px;
-  background: #dc2626;
-  box-shadow: 0 0 0 1.5px #ffffff;
+  top: -5px;
+  bottom: -5px;
+  width: 2px;
+  margin-left: -1px;
+  background: #ef4444;
   border-radius: 2px;
-  z-index: 3;
+  z-index: 4;
   pointer-events: none;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.9),
+    0 1px 4px rgba(239, 68, 68, 0.45);
 }
 
 .case-timeline .ct-playhead::before {
   content: "";
   position: absolute;
-  top: -9px;
-  left: -4px;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-top: 8px solid #dc2626;
-  filter: drop-shadow(0 0 1px #ffffff);
+  top: -6px;
+  left: 50%;
+  width: 11px;
+  height: 11px;
+  transform: translateX(-50%) rotate(45deg);
+  background: #ef4444;
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1.5px #ffffff,
+    0 1px 3px rgba(239, 68, 68, 0.5);
 }
 
 .ct-labels {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   font-size: 11px;
   color: #64748b;
-  margin-top: 4px;
+  margin-top: 8px;
+  font-variant-numeric: tabular-nums;
 }
 
 .ct-labels .ct-now {
   font-weight: 700;
   color: #0f172a;
+  padding: 2px 10px;
+  background: #ffffff;
+  border-radius: 999px;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.12),
+    inset 0 0 0 1px rgba(15, 23, 42, 0.07);
 }
 
 .ct-gaps-list {
@@ -1879,6 +2027,237 @@ code {
 
 .video-card {
   padding: 16px;
+}
+
+/* Live-annotated processing preview (worker writes an annotated frame every ~1.5s). */
+.live-preview {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #0a1520;
+}
+
+.live-preview img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+/* Processing state shown before Detect starts — mirrors the pipeline progress on the right. */
+.live-processing {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+  text-align: center;
+  color: #cbd9ea;
+}
+
+.live-processing strong {
+  font-size: 15px;
+  color: #eaf1fa;
+}
+
+.live-processing-count {
+  font-size: 13px;
+  color: #9fb4cc;
+  font-variant-numeric: tabular-nums;
+}
+
+.live-processing small {
+  font-size: 11.5px;
+  color: #6b8199;
+}
+
+.live-spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.16);
+  border-top-color: #4c9bf5;
+  animation: live-spin 0.9s linear infinite;
+}
+
+@keyframes live-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.live-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px;
+  text-align: center;
+  color: #9fb4cc;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.live-placeholder small {
+  color: #6b8199;
+  font-weight: 500;
+  font-size: 11.5px;
+}
+
+.live-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: rgba(220, 38, 38, 0.92);
+  border-radius: 999px;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  animation: live-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.live-hint {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  padding: 3px 9px;
+  font-size: 11px;
+  color: #d7e3f2;
+  background: rgba(10, 21, 32, 0.66);
+  border-radius: 7px;
+}
+
+/* Live "found so far" list — a plate drops in as each vehicle passes. */
+.live-list {
+  max-width: 1160px;
+  margin: 12px auto 0;
+  padding: 14px 16px;
+}
+
+.live-list-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.live-list-head strong {
+  font-size: 14px;
+}
+
+.live-list-head > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  background: var(--blue);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.live-list-head small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.live-list-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.live-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  animation: live-in 0.3s ease;
+}
+
+.live-item img {
+  flex: 0 0 auto;
+  display: block;
+  width: 94px;
+  height: 54px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #0a1520;
+}
+
+.live-item-meta {
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.live-item-meta strong {
+  display: block;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--navy);
+}
+
+.live-item-meta span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+@keyframes live-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .video-card video {
@@ -2564,6 +2943,16 @@ code {
   color: #64748b;
 }
 
+/* 2/3 majority agreed — value taken, only a light "you may double-check" tone. */
+.crosscheck-warn {
+  border-color: #f5e0a3;
+  background: #fffdf4;
+}
+
+.crosscheck-warn .crosscheck-verdict {
+  color: #a16207;
+}
+
 /* Background AI cross-check status banner on the review page */
 .crosscheck-banner {
   display: flex;
@@ -2900,7 +3289,7 @@ code {
   }
 
   .page-header h1 {
-    font-size: 26px;
+    font-size: 21px;
   }
 
   .page-header .button {
