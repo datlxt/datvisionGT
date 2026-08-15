@@ -63,14 +63,20 @@ def normalize_vietnamese_plate(text: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", text.upper())
 
 
-# Civilian motorcycle/passenger plate: province(2 digits) + series letter + 1 series char + block.
-_CIVILIAN_PLATE_RE = re.compile(r"\d{2}[A-Z][A-Z0-9]\d{4,5}")
+# Civilian motorcycle/passenger plate: province(2 digits) + series letter + an OPTIONAL second
+# series char + a 4-5 digit block. The optional char covers both the modern 8-9 char plates
+# (30E-123.45, 30E1-234.56) AND the legacy 7-char plates on older vehicles (29A-1234, 4 digits).
+_CIVILIAN_PLATE_RE = re.compile(r"\d{2}[A-Z][A-Z0-9]?\d{4,5}")
 # Military (quân đội): two-letter unit code + 4-5 digit block (e.g. KA1234, BC12345) — RED plates,
-# NO province number. Diplomatic / foreign (ngoại giao NG, nước ngoài NN, quốc tế QT): province +
-# a two-letter marker + block (e.g. 80NG12345, 80NN123, 51QT4321). These are read fine by the OCR
-# character-by-character; only the civilian-only grammar filter was discarding them.
-_MILITARY_PLATE_RE = re.compile(r"[A-Z]{2}\d{4,5}")
-_DIPLOMATIC_PLATE_RE = re.compile(r"\d{2}(?:NG|NN|QT|CV|LD)\d{3,5}")
+# NO province number. Diplomatic / foreign (ngoại giao NG, nước ngoài NN, quốc tế QT, cơ quan CV,
+# liên doanh LD): a two-letter marker between two digit groups — the marker sits EITHER right after
+# the province (80-NN-167-76 → 80NN16776) OR in the middle after the country + serial code
+# (41-291-NG-01 → 41291NG01). Both are read fine by the OCR; only the civilian-only filter discarded
+# them.
+# Military (Bộ Quốc phòng): a 2-OR-3-letter unit code + a 3-5 digit block, optionally a trailer
+# suffix (…RM / …BM). Covers AB-12-34, AB-123, ABS-12-34, ABL-12-34, ABX-12-34, AB-123RM, AB-123BM.
+_MILITARY_PLATE_RE = re.compile(r"[A-Z]{2,3}\d{3,5}(?:RM|BM)?")
+_DIPLOMATIC_PLATE_RE = re.compile(r"\d{2,5}(?:NG|NN|QT|CV|LD)\d{2,5}")
 
 
 def is_special_plate(value: str) -> bool:

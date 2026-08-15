@@ -8,6 +8,7 @@ from app.vision.plate.domain import (
     consolidate_vehicle_events,
     finalize_vehicle_track,
     is_plausible_vietnamese_plate,
+    is_special_plate,
     normalize_vietnamese_plate,
     plate_key,
 )
@@ -150,12 +151,16 @@ def test_same_plate_close_merges_into_one_spanning_event() -> None:
 def test_special_plates_accepted_without_finetune() -> None:
     # Military (2 letters + block) and diplomatic/foreign plates must pass the grammar filter so a
     # correct OCR read is not discarded — no model change needed.
-    assert is_plausible_vietnamese_plate("KA1234")  # quân đội
-    assert is_plausible_vietnamese_plate("BC12345")
-    assert is_plausible_vietnamese_plate("80NG12345")  # ngoại giao
-    assert is_plausible_vietnamese_plate("80NN123")  # nước ngoài, short block
-    # Civilian still valid; a non-plate string still rejected.
+    # Military (Bộ Quốc phòng): 2-3 letters + 3-5 digits, optional RM/BM trailer suffix.
+    for military in ("KA1234", "BC12345", "AB123", "AB123RM", "AB123BM", "ABS1234", "ABX1234"):
+        assert is_plausible_vietnamese_plate(military), military
+    # Diplomatic / foreign — marker right after the province OR in the middle (country+serial code).
+    for special in ("80NG12345", "80NN123", "80NN16776", "41291NG01", "29121CV101", "80441QT02"):
+        assert is_plausible_vietnamese_plate(special), special
+    # Civilian still valid (modern + legacy 7-char) and never mistaken for a special plate.
     assert is_plausible_vietnamese_plate("29D128130")
+    assert is_plausible_vietnamese_plate("29A1234")  # legacy 7-char
+    assert not is_special_plate("30E12345")
     assert not is_plausible_vietnamese_plate("ABCDEF")
     # The civilian glyph repair must NOT corrupt a military plate ('A' would otherwise become '4').
     assert plate_key("KA1234") == "KA1234"
