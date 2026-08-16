@@ -241,3 +241,15 @@ def read_plate_qwen(image_bytes: bytes, settings: Settings) -> CloudReading | No
         model=settings.qwen_ocr_model,
         timeout=settings.cloud_ocr_timeout_s,
     )
+
+
+def read_plate_third(image_bytes: bytes, settings: Settings) -> CloudReading | None:
+    """Reader C — the third independent AI (tie-breaker for the 2/3 majority)."""
+
+    return read_plate(
+        image_bytes,
+        base_url=settings.reader_c_url,
+        api_key=settings.reader_c_key if settings.reader_c_available else "",
+        model=settings.reader_c_ocr_model,
+        timeout=settings.cloud_ocr_timeout_s,
+    )

@@ -22,9 +22,11 @@ from app.db.session import SessionLocal
 from app.models import Artifact, Detection, ProcessingJob, Track
 from app.models.recognition import RecognitionResult
 from app.vision.plate.cloud_ocr import (
+    CloudReading,
     quality_group,
     read_plate_openai,
     read_plate_qwen,
+    read_plate_third,
 )
 from app.vision.plate.domain import plate_key
 
@@ -96,18 +98,44 @@ def run_cross_check(
     # Phase 2 — call the cloud readers for ALL plates CONCURRENTLY. This is pure network I/O
     # (the slow part), so a thread pool turns N sequential round-trips into N/CONCURRENCY — the
     # whole cross-check goes from minutes to seconds. No DB access happens inside the threads.
-    def read_both(item: tuple[Track, Detection, RecognitionResult | None, bytes]):
+    def read_pair(item: tuple[Track, Detection, RecognitionResult | None, bytes]):
         img = item[3]
         return read_plate_openai(img, settings), read_plate_qwen(img, settings)
 
+    def quality_split(gpt: CloudReading | None, qwen: CloudReading | None) -> bool:
+        """True when AI-1 & AI-2 do NOT already form a settled classification (≥2 labels agreeing).
+        Only then is the AI-3 tie-breaker worth a call."""
+
+        groups = [quality_group(r.quality) for r in (gpt, qwen) if r and r.quality]
+        groups = [g for g in groups if g]
+        return not (len(groups) >= 2 and len(set(groups)) == 1)
+
+    ai_reads: list[tuple[CloudReading | None, CloudReading | None, CloudReading | None]] = []
     if work:
         with ThreadPoolExecutor(max_workers=_CROSS_CHECK_CONCURRENCY) as pool:
-            ai_reads = list(pool.map(read_both, work))
-    else:
-        ai_reads = []
+            # Phase 2a — AI-1 + AI-2 for EVERY crop (they vote on both reading and classification).
+            pair_reads = list(pool.map(read_pair, work))
+            # Phase 2b — AI-3 (the classification tie-breaker) ONLY where AI-1 & AI-2 split on the
+            # quality group. Firing on the minority of ties keeps a free-tier third vendor well under
+            # its daily quota and adds no latency to the agreeing majority.
+            tiebreak_idx = [
+                i for i, (gpt, qwen) in enumerate(pair_reads) if quality_split(gpt, qwen)
+            ]
+            third_by_idx: dict[int, CloudReading | None] = {}
+            if tiebreak_idx:
+                thirds = list(
+                    pool.map(lambda img: read_plate_third(img, settings),
+                             [work[i][3] for i in tiebreak_idx])
+                )
+                third_by_idx = dict(zip(tiebreak_idx, thirds, strict=True))
+        ai_reads = [
+            (gpt, qwen, third_by_idx.get(i)) for i, (gpt, qwen) in enumerate(pair_reads)
+        ]
 
     # Phase 3 — apply results + write flags (sequential, main thread — DB is not thread-safe).
-    for (track, vehicle, recognition, _image), (gpt, qwen) in zip(work, ai_reads, strict=True):
+    for (track, vehicle, recognition, _image), (gpt, qwen, third) in zip(
+        work, ai_reads, strict=True
+    ):
         raw = dict(vehicle.raw_output or {})
         flags = [f for f in raw.get("quality_flags", []) if f not in CROSS_CHECK_FLAGS]
         if gpt is None and qwen is None:
@@ -118,10 +146,14 @@ def run_cross_check(
             raw["cloud_quality"] = gpt.quality if gpt else None
             raw["qwen_plate"] = qwen.plate if qwen else None
             raw["qwen_quality"] = qwen.quality if qwen else None
-            # (1) OCR cross-check by MAJORITY vote across every reader (local CCT + AI-1 + AI-2).
-            # A single weak reader shouldn't derail a plate the others agree on, so we trust the
-            # majority (≥2 of 3) and only flag when the readers are genuinely split (no majority) —
-            # which includes a reader that sees no plate where others read one (detection error).
+            # AI-3 is a CLASSIFICATION-only tie-breaker — its quality label votes, its plate read
+            # does NOT (reading already has 3 sources: local OCR + AI-1 + AI-2).
+            raw["third_quality"] = third.quality if third else None
+            # (1) OCR cross-check by MAJORITY vote — local CCT + AI-1 + AI-2 (3 sources; the local
+            # OCR is the third reader, so NO cloud reader is added here). A single weak reader
+            # shouldn't derail a plate the others agree on, so we trust the majority and only flag
+            # when they are genuinely split — including a reader that sees no plate where others
+            # read one (detection error).
             keys = []
             if recognition:
                 keys.append(plate_key(recognition.predicted_text))
@@ -130,10 +162,10 @@ def run_cross_check(
                     keys.append(plate_key(reader.plate) if reader.plate else "")
             present = [k for k in keys if k]
             top_count = Counter(present).most_common(1)[0][1] if present else 0
-            # UNANIMOUS = every reader that gave an answer read the SAME plate. A mere 2/3 majority
-            # is NOT enough on a hard plate — glare/occlusion can make two readers land on the same
-            # WRONG plate while the third dissents (89M1... misread as 89H... by local+AI-2). So a
-            # dissenting reader keeps the case flagged; only full agreement clears the doubt.
+            # UNANIMOUS = every reader that gave an answer read the SAME plate. A mere majority is
+            # not enough on a hard plate — glare/occlusion can make two readers land on the same
+            # WRONG plate while another dissents. So a dissenting reader keeps the case flagged;
+            # only full agreement clears the doubt.
             unanimous = len(present) >= 2 and len(set(present)) == 1
             if top_count >= 2 and 2 * top_count > len(keys):
                 flags.append("OCR_AGREE")  # a clear majority read the same plate
@@ -143,9 +175,9 @@ def run_cross_check(
             else:
                 flags.append("OCR_DISAGREEMENT")  # no majority — a human decides
                 disagree += 1
-            # A crop the local model read a plate on but that BOTH AIs saw as empty is almost
-            # certainly NOT a plate (a logo / tail-light / sticker the detector fired on) — real
-            # plates get read by the AIs too. Flag it so the reviewer can quickly discard it.
+            # A crop the local model read a plate on but that BOTH reading AIs saw as empty is
+            # almost certainly NOT a plate (a logo / tail-light / sticker the detector fired on) —
+            # real plates get read by the AIs too. Flag it so the reviewer can quickly discard it.
             ai_present = [r for r in (gpt, qwen) if r is not None]
             if (
                 len(ai_present) >= 2
@@ -154,20 +186,31 @@ def run_cross_check(
                 and recognition.predicted_text
             ):
                 flags.append("SUSPECTED_NON_PLATE")
-            # (2) Quality cross-check. Only the two AIs actually classify the plate quality (the
-            # local model has no quality label), so this is a two-reader check: both agree → take
-            # it (auto-filled); they differ → flag it, and the reviewer confirms the pre-filled
-            # AI-1 suggestion with one click.
-            gpt_group = quality_group(gpt.quality) if gpt and gpt.quality else None
-            qwen_group = quality_group(qwen.quality) if qwen and qwen.quality else None
-            if gpt_group and qwen_group:
-                flags.append(
-                    "QUALITY_AGREE" if gpt_group == qwen_group else "QUALITY_DISAGREEMENT"
-                )
-            elif gpt_group or qwen_group:
-                # Only one AI answered — trust its single label (nothing to disagree with).
-                flags.append("QUALITY_AGREE")
-                raw["cloud_quality"] = gpt_group or qwen_group
+            # (2) Quality classification by 2/3 MAJORITY across the THREE AIs (the local model has
+            # no quality label, so only the AIs vote). Readers are grouped into coarse categories
+            # ("bẩn"/"cũ,xước,mờ" → degrade, "che"/"dán" → occlusion…) so trivially different fine
+            # labels in the SAME group still count as agreement. ≥2 in one group → take it (the
+            # majority's fine label is pre-filled, a light hint); no majority (each AI a different
+            # group, e.g. degrade vs glare vs occlusion) → flag it, and the reviewer picks. This is
+            # exactly the "bị che vật lý" case: two AIs guessing different cosmetic issues while a
+            # third sees occlusion is a 3-way split → it lands in "Cần xem lại".
+            ai_quality = [
+                (reader.quality, quality_group(reader.quality))
+                for reader in (gpt, qwen, third)
+                if reader is not None and reader.quality
+            ]
+            raw["cloud_quality_all"] = [q for q, _ in ai_quality]
+            groups = [g for _, g in ai_quality if g]
+            if groups:
+                top_group, top_n = Counter(groups).most_common(1)[0]
+                if top_n >= 2:
+                    flags.append("QUALITY_AGREE")
+                    # Pre-fill the fine label from the FIRST reader in the winning group.
+                    raw["cloud_quality"] = next(
+                        q for q, g in ai_quality if g == top_group
+                    )
+                else:
+                    flags.append("QUALITY_DISAGREEMENT")  # 1-1-1 split — a human decides
         raw["quality_flags"] = flags
         vehicle.raw_output = raw
         flag_modified(vehicle, "raw_output")

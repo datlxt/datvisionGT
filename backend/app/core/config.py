@@ -51,11 +51,21 @@ class Settings(BaseSettings):
     qwen_api_key: str = ""
     qwen_base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     qwen_ocr_model: str = "qwen-vl-max"
+    # Reader C — a THIRD independent CLASSIFIER (quality only) so plate-quality has a 2/3 majority
+    # to break ties, instead of an unresolvable 1-1 split on two readers. Its plate READ is ignored
+    # (reading already has 3 sources: local OCR + AI-1 + AI-2). For a genuine cross-check it SHOULD
+    # be a different vendor than AI-1/AI-2 (correlated same-family errors weaken the majority);
+    # OpenAI-compatible endpoint, set its own key/model via env.
+    reader_c_api_key: str = ""
+    reader_c_base_url: str = ""  # empty → reuse the OpenAI endpoint (same proxy/account)
+    reader_c_ocr_model: str = "gpt-4o"
 
     @property
     def cloud_ocr_available(self) -> bool:
         # The feature is on as long as it is enabled and at least ONE reader has a key.
-        return self.cloud_ocr_enabled and bool(self.openai_api_key or self.qwen_api_key)
+        return self.cloud_ocr_enabled and bool(
+            self.openai_api_key or self.qwen_api_key or self.reader_c_api_key
+        )
 
     @property
     def openai_available(self) -> bool:
@@ -64,6 +74,23 @@ class Settings(BaseSettings):
     @property
     def qwen_available(self) -> bool:
         return self.cloud_ocr_enabled and bool(self.qwen_api_key)
+
+    @property
+    def reader_c_url(self) -> str:
+        return self.reader_c_base_url or self.openai_base_url
+
+    @property
+    def reader_c_key(self) -> str:
+        # Reuse the OpenAI key ONLY when reader C points at the OpenAI endpoint (same account, e.g.
+        # a different OpenAI model as AI-3). A different vendor (custom base_url like Gemini) must
+        # bring its own key — otherwise reader C stays off rather than sending the wrong key.
+        if self.reader_c_api_key:
+            return self.reader_c_api_key
+        return self.openai_api_key if self.reader_c_url == self.openai_base_url else ""
+
+    @property
+    def reader_c_available(self) -> bool:
+        return self.cloud_ocr_enabled and bool(self.reader_c_key)
 
     @property
     def cors_origin_list(self) -> list[str]:

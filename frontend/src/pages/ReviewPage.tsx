@@ -209,6 +209,8 @@ function CrossCheckCard({ event }: { event: EventResult }) {
   const unverified = event.quality_flags.includes("OCR_UNVERIFIED");
   if (!ran && !unverified) return null;
 
+  // Reading is cross-checked by 3 sources: the local OCR + AI-1 + AI-2. AI-3 is a
+  // classification-only tie-breaker, so it does NOT appear as a reading source here.
   const rows = [
     { name: "Model (máy)", value: event.normalized_plate || event.raw_plate || "—" },
     { name: "AI-1", value: event.cloud_plate },
@@ -941,7 +943,7 @@ export function ReviewPage({ job }: { job: Job }) {
             <GtPanel
               key={selected.track_id}
               cloudQuality={selected.cloud_quality}
-              qwenQuality={selected.qwen_quality}
+              cloudQualityAll={selected.cloud_quality_all}
               onChanged={() => setGtReload((value) => value + 1)}
               qualityDisagree={selected.quality_flags.includes("QUALITY_DISAGREEMENT")}
               record={selectedGt}
@@ -1126,13 +1128,13 @@ function GtPanel({
   record,
   onChanged,
   cloudQuality,
-  qwenQuality,
+  cloudQualityAll,
   qualityDisagree,
 }: {
   record: GroundTruthRecord | null;
   onChanged: () => void;
   cloudQuality?: string | null;
-  qwenQuality?: string | null;
+  cloudQualityAll?: string[];
   qualityDisagree?: boolean;
 }) {
   const [gtText, setGtText] = useState(record?.gt_text ?? record?.predicted_text ?? "");
@@ -1214,16 +1216,13 @@ function GtPanel({
       {cloudQuality ? (
         <p className={qualityDisagree ? "quality-hint quality-hint-diff" : "quality-hint"}>
           {qualityDisagree ? (
-            qwenQuality && qwenQuality !== cloudQuality ? (
-              <>
-                ⚠ 2 AI lệch — AI-1: <strong>{cloudQuality}</strong> · AI-2:{" "}
-                <strong>{qwenQuality}</strong>. Đã điền AI-1, đổi nếu cần.
-              </>
-            ) : (
-              `⚠ Phân loại chưa chắc — đã điền "${cloudQuality}", đổi nếu cần.`
-            )
+            // 1-1-1 split — the three AIs each said something different; show all so you decide.
+            <>
+              ⚠ 3 AI mỗi con một kiểu:{" "}
+              <strong>{(cloudQualityAll ?? []).join(" · ")}</strong> — bạn chọn phân loại.
+            </>
           ) : (
-            `Đề xuất: "${cloudQuality}" (đã điền, sửa nếu cần).`
+            `Đề xuất: "${cloudQuality}" (2/3 AI khớp, đã điền — sửa nếu cần).`
           )}
         </p>
       ) : null}

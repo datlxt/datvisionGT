@@ -56,6 +56,9 @@ services:
       QWEN_API_KEY: ${QWEN_API_KEY:-}
       QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
       QWEN_OCR_MODEL: ${QWEN_OCR_MODEL:-qwen-vl-max}
+      READER_C_API_KEY: ${READER_C_API_KEY:-}
+      READER_C_BASE_URL: ${READER_C_BASE_URL:-}
+      READER_C_OCR_MODEL: ${READER_C_OCR_MODEL:-gpt-5.6-sol}
     volumes:
       - ${DATA_ROOT:-./storage}:/app/storage
       - ${MODEL_DATA_ROOT:-./models}:/app/models:ro

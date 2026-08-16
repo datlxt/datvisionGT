@@ -77,6 +77,7 @@ export type EventResult = {
   plate_crop_url: string | null;
   cloud_plate?: string | null;
   cloud_quality?: string | null;
+  cloud_quality_all?: string[];
   qwen_plate?: string | null;
   qwen_quality?: string | null;
 };

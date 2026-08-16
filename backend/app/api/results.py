@@ -59,9 +59,10 @@ class EventResult(BaseModel):
     vehicle_crop_url: str
     plate_crop_url: str | None
     # Second-opinion reads from the cloud cross-check (None until it has been run).
-    cloud_plate: str | None = None  # GPT
+    cloud_plate: str | None = None  # AI-1 (GPT)
     cloud_quality: str | None = None
-    qwen_plate: str | None = None
+    cloud_quality_all: list[str] = []  # every AI's quality label, for the reviewer to compare
+    qwen_plate: str | None = None  # AI-2
     qwen_quality: str | None = None
 
 
@@ -505,6 +506,7 @@ def _load_results(job_id: uuid.UUID, session: Session) -> tuple[ProcessingJob, l
                 quality_flags=list(raw.get("quality_flags", [])),
                 cloud_plate=raw.get("cloud_plate"),
                 cloud_quality=raw.get("cloud_quality"),
+                cloud_quality_all=list(raw.get("cloud_quality_all", [])),
                 qwen_plate=raw.get("qwen_plate"),
                 qwen_quality=raw.get("qwen_quality"),
                 full_frame_url=_artifact_url(job.id, full_frame),
