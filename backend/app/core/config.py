@@ -21,7 +21,10 @@ class Settings(BaseSettings):
     storage_root: Path = Path("/app/storage")
     model_root: Path = Path("/app/models")
     cors_origins: str = "http://localhost:5173"
-    max_upload_bytes: int = 2 * 1024 * 1024 * 1024
+    # Raised to 8 GB so full-length car-lane clips (35-min recordings run 2-6 GB) can be uploaded.
+    # Long videos still cost disk + time — cutting them into short clips ("Cắt video") stays the
+    # recommended flow.
+    max_upload_bytes: int = 8 * 1024 * 1024 * 1024
     # These models (YOLOX-tiny, YOLOv9-T, CCT-XS) are small — more intra-op threads only add
     # scheduling overhead and run SLOWER. Measured: 2 threads ≈ 1.5× faster than 4. The spare
     # cores are better used by running FRAMES in parallel (see the pipeline worker pool).

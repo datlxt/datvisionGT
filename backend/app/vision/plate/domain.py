@@ -607,8 +607,13 @@ def consolidate_vehicle_events(
                 and other.plate_detection_count > event.plate_detection_count
                 and other.normalized_plate != event.normalized_plate
                 and (other.confidence or 0) >= (event.confidence or 0)
-                and event.start_timestamp_ms <= other.end_timestamp_ms
-                and event.end_timestamp_ms >= other.start_timestamp_ms
+                # Same pass even when the fragment sits in a SHORT gap just before/after the strong
+                # track (tracker lost then re-acquired the bike a fraction of a second later) — not
+                # only when the two windows literally overlap. A blurry pre-pass fragment (36:
+                # 120.52–121.28s, 90G…) ends 240ms before the real pass (38: 121.52s, 98D…) — it is
+                # the same bike, so allow up to near_plate_gap_ms of separation.
+                and event.start_timestamp_ms <= other.end_timestamp_ms + near_plate_gap_ms
+                and event.end_timestamp_ms >= other.start_timestamp_ms - near_plate_gap_ms
                 and (
                     event.end_timestamp_ms - event.start_timestamp_ms <= 2000
                     or other.plate_detection_count >= event.plate_detection_count * 5

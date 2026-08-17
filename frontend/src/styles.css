@@ -904,7 +904,12 @@ code {
   overflow: hidden;
   border-radius: 10px;
   background: #0a1520;
-  cursor: crosshair;
+  /* High-visibility crosshair: red core + white outline so it stands out on concrete AND dark
+     video (the OS default crosshair washes out against light backgrounds). Hotspot centered. */
+  cursor:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26'%3E%3Cg stroke-linecap='round'%3E%3Cpath d='M13 2V10M13 16V24M2 13H10M16 13H24' stroke='white' stroke-width='4.5'/%3E%3Cpath d='M13 2V10M13 16V24M2 13H10M16 13H24' stroke='%23ff2d2d' stroke-width='2'/%3E%3Ccircle cx='13' cy='13' r='1.6' fill='%23ff2d2d' stroke='white' stroke-width='1'/%3E%3C/g%3E%3C/svg%3E")
+      13 13,
+    crosshair;
   touch-action: none;
   user-select: none;
 }
@@ -1363,6 +1368,29 @@ code {
 
 .crosscheck-inline strong {
   font-weight: 800;
+}
+
+/* Subtle "re-run cross-check" affordance — cross-check is automatic, so this is only a fallback. */
+.crosscheck-inline .link-rerun {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.crosscheck-inline .link-rerun:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--blue);
+}
+
+.crosscheck-inline .link-rerun:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .review-actions-spacer {
@@ -2029,6 +2057,154 @@ code {
   padding: 16px;
 }
 
+/* Live processing preview: streamed frame + a canvas that draws detection boxes over it. */
+.live-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.live-stage {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0a1520;
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.live-stage img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.live-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.live-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #9fb2c6;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.live-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: rgba(220, 38, 38, 0.92);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.live-plates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.live-plates code {
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: #eef4ff;
+  color: var(--blue);
+  font-weight: 700;
+}
+
+/* Live detected-vehicle list: vertical rows — index + time | full frame | plate crop | read. */
+.live-detections {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.live-detections-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.live-detections-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.live-det-row {
+  display: grid;
+  grid-template-columns: 60px 150px 150px 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #fff;
+}
+
+.live-det-idx {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.live-det-idx strong {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.live-det-idx small {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.live-det-frame {
+  width: 150px;
+  height: 84px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #0a1520;
+}
+
+.live-det-plate {
+  width: 150px;
+  height: 66px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #0a1520;
+}
+
+.live-det-empty {
+  background: #0a1520;
+}
+
+.live-det-read {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
 /* Live-annotated processing preview (worker writes an annotated frame every ~1.5s). */
 .live-preview {
   position: relative;
@@ -2461,7 +2637,17 @@ code {
 
 .filter-tabs {
   display: flex;
+  align-items: center;
   gap: 5px;
+}
+
+/* Separates the "what the model read" tabs from the "review status" tabs so they aren't read as
+   one adding-up list. */
+.filter-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 4px 4px;
+  background: var(--border);
 }
 
 .filter-tabs button {

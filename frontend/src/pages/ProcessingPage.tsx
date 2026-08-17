@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Icon } from "../components/Icon";
 import { ConfirmDialog, PageHeader, ProgressBar, StatusBadge } from "../components/ui";
@@ -97,7 +97,16 @@ export function ProcessingPage({
 
       <div className="processing-grid card">
         <section className="video-card">
-          <video controls preload="metadata" src={`/api/v1/jobs/${job.id}/source`} />
+          {running ? (
+            <LiveView
+              jobId={job.id}
+              processed={job.processed_frames}
+              progress={job.progress}
+              total={job.total_frames ?? 0}
+            />
+          ) : (
+            <video controls preload="metadata" src={`/api/v1/jobs/${job.id}/source`} />
+          )}
           <div className="video-meta">
             <div>
               <span>File nguồn</span>
@@ -223,5 +232,110 @@ export function ProcessingPage({
         title="Hủy job đang chạy?"
       />
     </section>
+  );
+}
+
+type LiveBox = { k: "v" | "p"; x1: number; y1: number; x2: number; y2: number; t?: string };
+type LiveFrame = {
+  img: string;
+  w: number;
+  h: number;
+  boxes: LiveBox[];
+  progress: number;
+  roi?: number[];
+};
+// Live processing preview: subscribes to the worker's SSE snapshot stream and draws detection boxes
+// on a canvas over the streamed frame. Smooth because only a tiny (480px) image + box COORDINATES
+// travel — the browser does the drawing, nothing is re-rendered on the server.
+function LiveView({
+  jobId,
+  progress,
+  processed,
+  total,
+}: {
+  jobId: string;
+  progress: number;
+  processed: number;
+  total: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [frame, setFrame] = useState<LiveFrame | null>(null);
+
+  useEffect(() => {
+    const source = new EventSource(`/api/v1/jobs/${jobId}/live`);
+    source.onmessage = (event) => {
+      try {
+        setFrame(JSON.parse(event.data) as LiveFrame);
+      } catch {
+        /* ignore a malformed frame */
+      }
+    };
+    source.addEventListener("done", () => source.close());
+    return () => source.close();
+  }, [jobId]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !frame) return;
+    canvas.width = frame.w;
+    canvas.height = frame.h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, frame.w, frame.h);
+    // Draw the ROI outline first (dashed amber) so detection boxes sit on top of it.
+    if (frame.roi && frame.roi.length === 4) {
+      ctx.setLineDash([6, 4]);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#2482ef"; // blue — matches the ROI drawn on the create screen (--blue)
+      ctx.strokeRect(
+        frame.roi[0],
+        frame.roi[1],
+        frame.roi[2] - frame.roi[0],
+        frame.roi[3] - frame.roi[1],
+      );
+      ctx.setLineDash([]);
+    }
+    for (const box of frame.boxes ?? []) {
+      const isPlate = box.k === "p";
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = isPlate ? "#22c55e" : "#3b82f6";
+      ctx.strokeRect(box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1);
+      if (isPlate && box.t) {
+        ctx.font = "bold 12px sans-serif";
+        const width = ctx.measureText(box.t).width + 6;
+        ctx.fillStyle = "#22c55e";
+        ctx.fillRect(box.x1, Math.max(0, box.y1 - 15), width, 15);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(box.t, box.x1 + 3, Math.max(11, box.y1 - 4));
+      }
+    }
+  }, [frame]);
+
+  return (
+    <div className="live-view">
+      <div className="live-stage">
+        {frame ? (
+          <>
+            <img alt="Xem trực tiếp" src={`data:image/jpeg;base64,${frame.img}`} />
+            <canvas className="live-canvas" ref={canvasRef} />
+          </>
+        ) : (
+          <div className="live-waiting">
+            <Icon name="clock" size={18} />
+            {progress > 0 && progress < 22 ? (
+              <span>
+                Đang trích frame… {processed.toLocaleString("vi-VN")}
+                {total > 0 ? ` / ${total.toLocaleString("vi-VN")}` : ""} ({Math.round(progress)}%)
+              </span>
+            ) : (
+              <span>Đang khởi động detect… khung bao sẽ hiện ngay.</span>
+            )}
+          </div>
+        )}
+        <span className="live-badge">
+          ● LIVE{frame ? ` · ${Math.round(frame.progress)}%` : ""}
+        </span>
+      </div>
+    </div>
   );
 }

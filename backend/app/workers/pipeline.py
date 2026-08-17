@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.workers import live
 from app.models import (
     Artifact,
     Detection,
@@ -22,12 +23,13 @@ from app.models import (
     RecognitionResult,
     Track,
 )
+from app.vision.media.evidence import EvidenceExtractor
 from app.vision.media.reader import sha256_file
 from app.vision.plate.fastalpr_adapter import FastAlprPlateEngine, crop_bgr, pad_bbox
 from app.vision.plate.motion_vehicle import CompositeVehicleDetector, FixedCameraMotionDetector
 from app.vision.plate.pipeline import MotorcyclePlatePipeline, PipelineFrame, RearCameraConfig
 from app.vision.plate.yolox_vehicle import YoloXMotorcycleDetector
-from app.workers.evidence import EvidenceCancelled, process_evidence_job
+from app.workers.evidence import EvidenceCancelled, _resolve_source, persist_evidence
 
 # COCO class ids + evidence label per selectable vehicle type. Same YOLOX-tiny model.
 # "motorcycle" mode also accepts COCO bicycle (1): plate-less e-bikes / scooters / bicycles are
@@ -115,9 +117,8 @@ def _event_key(job_id: uuid.UUID, start_ms: int, end_ms: int, bbox: tuple[int, .
 
 
 def process_plate_job(job_id: str) -> dict[str, Any]:
-    """RQ vertical slice: evidence -> motorcycle -> plate -> OCR -> track vote -> DB."""
+    """RQ vertical slice: FUSED evidence+detect in one pass -> track vote -> DB."""
 
-    process_evidence_job(job_id)
     settings = get_settings()
     parsed_job_id = uuid.UUID(job_id)
     model_root = settings.model_root.resolve()
@@ -132,9 +133,11 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
         if job is None:
             raise ValueError(f"Processing job does not exist: {job_id}")
         try:
+            source = _resolve_source(settings.storage_root, job.source_path)
             job.status = "PROCESSING"
             job.current_stage = "MODEL_INITIALIZATION"
-            job.progress = 22.0
+            job.progress = 1.0
+            job.started_at = job.started_at or datetime.now(UTC)
             session.commit()
 
             vehicle_model = _get_or_create_model(
@@ -220,35 +223,64 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
                 alpr,
                 config=RearCameraConfig(**rear_config_kwargs),
             )
-            frames = list(
-                session.scalars(
-                    select(Artifact)
-                    .where(Artifact.job_id == job.id, Artifact.kind == "FULL_FRAME")
-                    .order_by(Artifact.timestamp_ms)
-                ).all()
-            )
-            if not frames:
-                raise ValueError("No evidence frames available for inference")
+            # FUSED pass: extract each sampled frame AND detect it in the SAME loop — no
+            # decode→save→reload roundtrip, and boxes/ROI appear from the first frame (on_frame fires
+            # per detected frame). The evidence manifest is captured from the generator's return
+            # value, then its artifacts are persisted afterwards. Best-effort live — see live.py.
+            live_conn = None
+            try:
+                live_conn = live.make_redis(settings.redis_url)
+                live.clear(live_conn, str(job.id))  # drop stale preview from a previous retry
+            except Exception:
+                live_conn = None
+            roi_norm = rear_config_kwargs.get("roi")
+            manifest_holder: dict[str, Any] = {}
 
-            def iter_frames():
-                for index, artifact in enumerate(frames, start=1):
-                    if index == 1 or index % 25 == 0:
-                        session.refresh(job)
-                        if job.cancel_requested_at is not None:
-                            raise EvidenceCancelled("Inference was cancelled")
-                        job.current_stage = "MOTORCYCLE_PLATE_INFERENCE"
-                        job.progress = 22.0 + index / len(frames) * 70.0
-                        session.commit()
-                    path = (settings.storage_root / artifact.storage_key).resolve(strict=True)
-                    rgb = np.asarray(Image.open(path).convert("RGB"))
+            def extract_progress(decoded: int, total: int | None) -> None:
+                session.refresh(job)
+                if job.cancel_requested_at is not None:
+                    raise EvidenceCancelled("Processing was cancelled")
+                job.processed_frames = decoded
+                job.current_stage = "DETECTING"
+                if total:
+                    job.total_frames = total
+                    job.progress = min(90.0, 1.0 + decoded / total * 89.0)
+                session.commit()
+
+            def fused_frames():
+                generator = EvidenceExtractor().iter_extract(
+                    source_path=source,
+                    storage_root=settings.storage_root,
+                    job_id=str(job.id),
+                    sample_rate=job.sample_rate,
+                    progress_callback=extract_progress,
+                )
+                while True:
+                    try:
+                        bgr, evidence_frame = next(generator)
+                    except StopIteration as stop:
+                        manifest_holder["manifest"] = stop.value
+                        return
                     yield PipelineFrame(
-                        frame_number=int(artifact.frame_number or 0),
-                        timestamp_ms=int(artifact.timestamp_ms or 0),
-                        storage_key=artifact.storage_key,
-                        bgr=rgb[:, :, ::-1].copy(),
+                        frame_number=int(evidence_frame.frame_index or 0),
+                        timestamp_ms=int((evidence_frame.timestamp_us or 0) // 1000),
+                        storage_key=evidence_frame.storage_key,
+                        bgr=bgr,
                     )
 
-            events = pipeline.run(iter_frames())
+            def on_frame(frame, observations, _next_id):
+                if live_conn is not None:
+                    live.publish_frame(
+                        live_conn, str(job.id), frame.bgr, observations, job.progress, roi_norm
+                    )
+
+            events = pipeline.run(fused_frames(), on_frame=on_frame)
+            manifest = manifest_holder.get("manifest")
+            if manifest is None or not manifest.frames:
+                raise ValueError("No evidence frames were extracted for inference")
+            persist_evidence(session, job, manifest, settings.storage_root, source)
+            if live_conn is not None:
+                live.clear(live_conn, str(job.id))
             job.current_stage = "PERSISTING_RESULTS"
             job.progress = 94.0
             session.commit()

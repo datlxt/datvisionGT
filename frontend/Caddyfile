@@ -1,5 +1,15 @@
 {$SITE_ADDRESS::80} {
-    encode zstd gzip
+    # Compress everything EXCEPT the live SSE stream — gzip buffers a streaming response and would
+    # stall the Server-Sent Events (the live processing preview).
+    @notlive not path /api/v1/jobs/*/live
+    encode @notlive zstd gzip
+
+    # Live preview SSE: no buffering, flush every write so detection boxes arrive in real time.
+    handle /api/v1/jobs/*/live {
+        reverse_proxy backend:8000 {
+            flush_interval -1
+        }
+    }
 
     handle /api/* {
         reverse_proxy backend:8000

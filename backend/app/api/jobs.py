@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import shutil
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Annotated
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, Response, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from redis import Redis
 from rq import Queue
@@ -22,9 +23,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import get_settings
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.models import JobEvent, ProcessingJob
 from app.vision.media import PyAVVideoReader
+from app.workers import live
 from app.workers.callbacks import mark_job_failed
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -157,7 +159,9 @@ async def create_job(
         source_mime_type=request.headers.get("content-type") or metadata.mime_type,
         object_mode="PLATE",
         processing_mode="BALANCED",
-        sample_rate=4.0,
+        # 2 fps: a plate is visible ~2-3s so this still yields 4-6 reads per pass (enough for the
+        # vote + best-frame pick) while ~halving the detection frames — the main speed lever.
+        sample_rate=2.0,
         status="DRAFT",
         current_stage="UPLOADED",
         progress=0.0,
@@ -180,7 +184,7 @@ async def create_job(
                 "quality-gate+multi-frame-vote+best-frame-exposure"
                 "+near-plate-merge+global-plate-dedupe+motion-suppression"
             ),
-            "sample_rate": 4.0,
+            "sample_rate": 2.0,
             "result_classes": ["RECOGNIZED", "LOW_CONFIDENCE", "UNREADABLE", "NO_PLATE"],
         },
     )
@@ -227,6 +231,52 @@ def get_job_source(
     if not path.is_relative_to(root):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid source path")
     return FileResponse(path, media_type=job.source_mime_type or "application/octet-stream")
+
+
+@router.get("/{job_id}/live")
+def stream_live_preview(job_id: uuid.UUID) -> StreamingResponse:
+    """Server-Sent Events stream of the worker's live processing preview (see workers/live.py).
+
+    Reads the latest annotated snapshot the worker publishes to Redis and forwards it to the
+    browser. Stops when the job leaves a processing state. Read-only, best-effort — no DB writes.
+    """
+
+    settings = get_settings()
+    key = live.live_key(str(job_id))
+    ev_key = live.events_key(str(job_id))
+    _ACTIVE = ("DRAFT", "PENDING", "QUEUED", "PROCESSING")
+
+    def generator():
+        conn = Redis.from_url(settings.redis_url)
+        last: bytes | None = None
+        ev_sent = 0
+        ticks = 0
+        for _ in range(2400):  # hard cap ~6 min so a stray stream can't run forever
+            data = conn.get(key)
+            if data is not None and data != last:
+                last = data
+                yield f"data: {data.decode('utf-8')}\n\n"
+            # Deliver any newly finished-vehicle cards (crop + full frame) as a separate event type.
+            ev_len = conn.llen(ev_key)
+            if ev_len > ev_sent:
+                for item in conn.lrange(ev_key, ev_sent, ev_len - 1):
+                    yield f"event: detection\ndata: {item.decode('utf-8')}\n\n"
+                ev_sent = ev_len
+            ticks += 1
+            if ticks % 13 == 0:  # ~every 2s: end the stream once processing has finished
+                with SessionLocal() as check:
+                    job = check.get(ProcessingJob, job_id)
+                    if job is None or job.status not in _ACTIVE:
+                        yield "event: done\ndata: {}\n\n"
+                        return
+            time.sleep(0.15)
+        yield "event: done\ndata: {}\n\n"
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/{job_id}/start", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)

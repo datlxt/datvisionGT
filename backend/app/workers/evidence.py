@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.models import Artifact, JobEvent, ProcessingJob
 from app.vision.media import EvidenceExtractor
+from app.workers import live
 
 
 class EvidenceCancelled(RuntimeError):
@@ -47,6 +48,82 @@ def _upsert_artifact(session: Any, job_id: uuid.UUID, values: dict[str, Any]) ->
         setattr(artifact, name, value)
 
 
+def persist_evidence(
+    session: Any, job: ProcessingJob, manifest: Any, storage_root: Path, source: Path
+) -> dict[str, Any]:
+    """Upsert SOURCE_VIDEO + FULL_FRAME artifacts and stamp the job's source metadata from a
+    completed evidence manifest. Returns the merged config_snapshot. Does NOT change job status —
+    the caller (standalone extract, or the fused detect pass) owns the lifecycle."""
+
+    source_key = source.relative_to(storage_root.resolve()).as_posix()
+    _upsert_artifact(
+        session,
+        job.id,
+        {
+            "kind": "SOURCE_VIDEO",
+            "storage_key": source_key,
+            "sha256": manifest.source.sha256,
+            "mime_type": manifest.source.mime_type,
+            "size_bytes": manifest.source.size_bytes,
+            "width": manifest.source.width,
+            "height": manifest.source.height,
+            "frame_number": None,
+            "pts": None,
+            "timestamp_ms": None,
+            "metadata_": {
+                "codec": manifest.source.codec,
+                "duration_ms": manifest.source.duration_ms,
+                "fps": manifest.source.fps,
+                "time_base": manifest.source.time_base,
+            },
+        },
+    )
+    for frame in manifest.frames:
+        _upsert_artifact(
+            session,
+            job.id,
+            {
+                "kind": "FULL_FRAME",
+                "storage_key": frame.storage_key,
+                "sha256": frame.sha256,
+                "mime_type": "image/jpeg",
+                "size_bytes": frame.size_bytes,
+                "width": frame.width,
+                "height": frame.height,
+                "frame_number": frame.frame_index,
+                "pts": frame.pts,
+                "timestamp_ms": frame.timestamp_ms,
+                "metadata_": {
+                    "timestamp_us": frame.timestamp_us,
+                    "target_timestamp_us": frame.target_timestamp_us,
+                },
+            },
+        )
+    config = {
+        **job.config_snapshot,
+        "evidence": {
+            "pipeline_version": manifest.pipeline_version,
+            "sample_rate": manifest.sample_rate,
+            "jpeg_quality": 92,
+        },
+    }
+    job.source_hash = manifest.source.sha256
+    job.source_size_bytes = manifest.source.size_bytes
+    job.source_mime_type = manifest.source.mime_type
+    job.duration_ms = manifest.source.duration_ms
+    job.width = manifest.source.width
+    job.height = manifest.source.height
+    job.fps = manifest.source.fps
+    job.codec = manifest.source.codec
+    job.time_base = manifest.source.time_base
+    job.is_variable_frame_rate = manifest.source.is_variable_frame_rate
+    job.total_frames = manifest.source.frame_count
+    job.processed_frames = manifest.decoded_frame_count
+    job.config_snapshot = config
+    job.config_hash = _config_hash(config)
+    return config
+
+
 def process_evidence_job(job_id: str) -> dict[str, Any]:
     """RQ task: extract evidence and persist reproducibility metadata in PostgreSQL."""
 
@@ -75,81 +152,31 @@ def process_evidence_job(job_id: str) -> dict[str, Any]:
                     job.progress = min(19.0, 1.0 + decoded_frames / total_frames * 18.0)
                 session.commit()
 
+            # Stream sampled frames to the live preview during extraction so the video plays from
+            # the first second (no dead "startup" wait). Best-effort — never breaks extraction.
+            live_conn = None
+            try:
+                live_conn = live.make_redis(settings.redis_url)
+                live.clear(live_conn, str(job.id))
+            except Exception:
+                live_conn = None
+
+            def on_evidence_frame(bgr: Any, decoded: int, total: int | None) -> None:
+                if live_conn is None:
+                    return
+                progress = 1.0 + (decoded / total * 18.0 if total else 0.0)
+                live.publish_frame(live_conn, str(job.id), bgr, [], progress)
+
             manifest = EvidenceExtractor().extract(
                 source_path=source,
                 storage_root=settings.storage_root,
                 job_id=str(job.id),
                 sample_rate=job.sample_rate,
                 progress_callback=update_progress,
+                frame_callback=on_evidence_frame,
             )
 
-            source_key = source.relative_to(settings.storage_root.resolve()).as_posix()
-            _upsert_artifact(
-                session,
-                job.id,
-                {
-                    "kind": "SOURCE_VIDEO",
-                    "storage_key": source_key,
-                    "sha256": manifest.source.sha256,
-                    "mime_type": manifest.source.mime_type,
-                    "size_bytes": manifest.source.size_bytes,
-                    "width": manifest.source.width,
-                    "height": manifest.source.height,
-                    "frame_number": None,
-                    "pts": None,
-                    "timestamp_ms": None,
-                    "metadata_": {
-                        "codec": manifest.source.codec,
-                        "duration_ms": manifest.source.duration_ms,
-                        "fps": manifest.source.fps,
-                        "time_base": manifest.source.time_base,
-                    },
-                },
-            )
-            for frame in manifest.frames:
-                _upsert_artifact(
-                    session,
-                    job.id,
-                    {
-                        "kind": "FULL_FRAME",
-                        "storage_key": frame.storage_key,
-                        "sha256": frame.sha256,
-                        "mime_type": "image/jpeg",
-                        "size_bytes": frame.size_bytes,
-                        "width": frame.width,
-                        "height": frame.height,
-                        "frame_number": frame.frame_index,
-                        "pts": frame.pts,
-                        "timestamp_ms": frame.timestamp_ms,
-                        "metadata_": {
-                            "timestamp_us": frame.timestamp_us,
-                            "target_timestamp_us": frame.target_timestamp_us,
-                        },
-                    },
-                )
-
-            config = {
-                **job.config_snapshot,
-                "evidence": {
-                    "pipeline_version": manifest.pipeline_version,
-                    "sample_rate": manifest.sample_rate,
-                    "jpeg_quality": 92,
-                },
-            }
-            job.source_hash = manifest.source.sha256
-            job.source_size_bytes = manifest.source.size_bytes
-            job.source_mime_type = manifest.source.mime_type
-            job.duration_ms = manifest.source.duration_ms
-            job.width = manifest.source.width
-            job.height = manifest.source.height
-            job.fps = manifest.source.fps
-            job.codec = manifest.source.codec
-            job.time_base = manifest.source.time_base
-            job.is_variable_frame_rate = manifest.source.is_variable_frame_rate
-            job.total_frames = manifest.source.frame_count
-            job.processed_frames = manifest.decoded_frame_count
-            job.config_snapshot = config
-            job.config_hash = _config_hash(config)
+            persist_evidence(session, job, manifest, settings.storage_root, source)
             job.status = "PENDING"
             job.current_stage = "EVIDENCE_READY"
             job.progress = 20.0

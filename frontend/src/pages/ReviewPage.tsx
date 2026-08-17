@@ -50,6 +50,11 @@ const QUALITY_OPTIONS = [
   "Xe không biển",
 ];
 
+// The "no plate" category + the sentinel GT string the backend/export expect for a plateless
+// vehicle (matches NO_PLATE_TEXT in backend export/plate_report.py).
+const NO_PLATE_OPTION = "Xe không biển";
+const NO_PLATE_GT = "LPN_NO_PLATE_VEHICLE";
+
 function patchGt(recordId: string, body: Record<string, unknown>) {
   return api<GroundTruthRecord>(`/api/v1/ground-truth/${recordId}`, {
     method: "PATCH",
@@ -62,7 +67,7 @@ function actionGt(recordId: string, action: "verify" | "discard" | "restore") {
   return api<GroundTruthRecord>(`/api/v1/ground-truth/${recordId}/${action}`, { method: "POST" });
 }
 
-type Filter = "ALL" | "RECOGNIZED" | "REVIEW" | "NO_PLATE" | "CHECK";
+type Filter = "ALL" | "RECOGNIZED" | "UNCERTAIN" | "NO_PLATE" | "CHECK";
 
 function confidence(value: number | null) {
   return value === null ? "Chưa có dữ liệu" : `${Math.round(value * 100)}%`;
@@ -140,6 +145,18 @@ function needsReview(event: EventResult): boolean {
     event.quality_flags.includes("WRONG_DIRECTION") ||
     // Special (military/diplomatic) plate the OCR wasn't trained on — always human-verified.
     event.quality_flags.includes("SPECIAL_PLATE")
+  );
+}
+
+// The model produced a plate AND we trust it. The offline pipeline marks a plate read in a SINGLE
+// frame as LOW_CONFIDENCE even at 99% vote confidence, but the cross-check often then CONFIRMS it
+// (≥2 of 3 readers agree) — a clear plate seen once is not "uncertain". So a read is reliable when
+// it is a solid RECOGNIZED read OR a cross-check-agreed one; only a genuinely unconfirmed weak /
+// unreadable read stays in "Đọc chưa chắc".
+function isReliableRead(event: EventResult): boolean {
+  if (event.classification === "NO_PLATE" || !event.normalized_plate) return false;
+  return (
+    event.classification === "RECOGNIZED" || event.quality_flags.includes("OCR_AGREE")
   );
 }
 
@@ -224,7 +241,7 @@ function CrossCheckCard({ event }: { event: EventResult }) {
   const verdict = unverified
     ? { cls: "info", icon: "clock" as const, text: "Chưa kiểm chéo được." }
     : nonPlate
-      ? { cls: "diff", icon: "alert" as const, text: "2 AI không thấy biển — nghi logo/đèn, nên Loại." }
+      ? { cls: "diff", icon: "alert" as const, text: "AI không xác nhận được biển — nghi logo/decal. Chọn \"Xe không biển\" hoặc Loại." }
       : disagree
       ? { cls: "diff", icon: "alert" as const, text: "3 nguồn đọc KHÁC nhau — chọn biển đúng." }
       : unanimous
@@ -314,6 +331,10 @@ export function ReviewPage({ job }: { job: Job }) {
   useEffect(() => {
     if (evidenceTab !== "video" || !results) return;
     if (Date.now() < manualSelectUntil.current) return; // a fresh manual pick must not be undone
+    // Only FOLLOW while the video is actually PLAYING. When it is paused (the user is browsing the
+    // list or just clicked a case), a stray time-update must never yank the selection to another
+    // track — that was the "click a case, it jumps to a different one" bug.
+    if (videoRef.current?.paused) return;
     const id = trackIdForTime(results.events, videoMs);
     if (id && id !== selectedId) {
       setSelectedId(id);
@@ -349,14 +370,14 @@ export function ReviewPage({ job }: { job: Job }) {
         event.track_code.toUpperCase().includes(normalizedQuery) ||
         (event.normalized_plate ?? "").toUpperCase().includes(normalizedQuery);
       if (!matchesQuery) return false;
-      if (filter === "RECOGNIZED") return event.classification === "RECOGNIZED";
+      if (filter === "RECOGNIZED") return isReliableRead(event);
       if (filter === "NO_PLATE") return event.classification === "NO_PLATE";
-      if (filter === "REVIEW") {
-        return (
-          needsReview(event) &&
-          gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED"
-        );
-      }
+      // Read a plate but NOT confirmed (weak single-frame with no cross-check agreement, or
+      // unreadable) — so the three "read result" tabs add up to the total without dropping a case.
+      if (filter === "UNCERTAIN")
+        return !isReliableRead(event) && event.classification !== "NO_PLATE";
+      // "Cần xử lý" = everything not yet verified. The matched cases are already auto-verified, so
+      // what remains is exactly what a human still has to handle (risky reads + no-plate + splits).
       if (filter === "CHECK") {
         return gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED";
       }
@@ -369,14 +390,19 @@ export function ReviewPage({ job }: { job: Job }) {
       (event) => gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED",
     ).length ?? 0;
 
-  // Cases still WAITING for a human — risky reads AND plate-fine-but-quality-undecided. Drops as
-  // they get verified, so a quality-disagreement case can never be silently missed.
-  const needReviewCount =
-    results?.events.filter(
-      (event) =>
-        needsReview(event) &&
-        gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED",
-    ).length ?? 0;
+  // "Read result" buckets computed from the events (not the raw backend counts) so a single-frame
+  // read the cross-check CONFIRMED counts as "Model ra biển", not "Đọc chưa chắc". Mutually
+  // exclusive → the three sum to the total.
+  const readCounts = useMemo(() => {
+    const events = results?.events ?? [];
+    let reliable = 0;
+    let noPlate = 0;
+    for (const event of events) {
+      if (event.classification === "NO_PLATE") noPlate += 1;
+      else if (isReliableRead(event)) reliable += 1;
+    }
+    return { reliable, noPlate, uncertain: events.length - reliable - noPlate };
+  }, [results]);
 
   const totalMs = Math.max(
     job.duration_ms ?? 0,
@@ -564,14 +590,15 @@ export function ReviewPage({ job }: { job: Job }) {
             <Icon name="check" size={16} /> {autoBusy ? "Đang duyệt…" : "Tự duyệt"}
           </button>
         </div>
+        {/* AI cross-check runs automatically after processing; this is a manual re-run fallback. */}
         <button
           className="button button-blue button-compact"
           disabled={crossBusy}
           onClick={runCrossCheck}
-          title="Đọc lại mọi biển bằng 2 model AI (cloud) so với model local; biển 3 nguồn không khớp sẽ vào 'Cần xem lại'."
+          title="Chạy lại đối chiếu AI (bình thường tự chạy sau khi xử lý xong)."
           type="button"
         >
-          <Icon name="refresh" size={16} /> {crossBusy ? "Đang kiểm chéo…" : "Kiểm chéo AI"}
+          <Icon name="refresh" size={16} /> {crossBusy ? "Đang chạy…" : "Chạy lại AI"}
         </button>
         <div className="review-actions-spacer" />
         <button
@@ -590,15 +617,29 @@ export function ReviewPage({ job }: { job: Job }) {
         </button>
       </div>
 
-      {results.cross_check?.status === "done" && (
-        <div className="crosscheck-inline">
-          <Icon name="check" size={15} /> Đã kiểm chéo AI:{" "}
-          <strong>{results.cross_check.auto_verified ?? 0}</strong> tự duyệt (3 nguồn khớp) ·{" "}
-          <strong>{results.cross_check.disagree ?? 0}</strong> cần xem lại
-          {(results.cross_check.unverified ?? 0) > 0 &&
-            ` · ${results.cross_check.unverified} chưa kiểm được`}
-        </div>
-      )}
+      {/* Cross-check runs AUTOMATICALLY after processing — this line just reports its state. The
+          disagreement count is labelled "AI đọc lệch" (not "cần xem lại") so it doesn't clash with
+          the "Cần xem lại" tab, which counts more than just reader splits. */}
+      <div className="crosscheck-inline">
+        {results.cross_check?.status === "running" ||
+        results.cross_check?.status === "pending" ? (
+          <>
+            <Icon name="clock" size={15} /> Đang đối chiếu AI… <em>(tự động)</em>
+          </>
+        ) : results.cross_check?.status === "done" ? (
+          // Reported in the SAME (consolidated) numbers as the tabs — 77 auto-verified, and the
+          // live "Cần xử lý" remainder — not the raw per-track crop count, which confused users.
+          <>
+            <Icon name="check" size={15} /> AI đối chiếu xong:{" "}
+            <strong>{results.cross_check.auto_verified ?? 0}</strong> tự duyệt (3 nguồn khớp) · còn{" "}
+            <strong>{needCheckCount}</strong> cần xử lý
+          </>
+        ) : (
+          <>
+            <Icon name="clock" size={15} /> AI chưa đối chiếu — bấm “Chạy lại AI” ở trên.
+          </>
+        )}
+      </div>
 
       <div className="review-toolbar">
         <label>
@@ -609,23 +650,31 @@ export function ReviewPage({ job }: { job: Job }) {
             value={query}
           />
         </label>
+        {/* Two DIFFERENT groupings, separated so they aren't read as one adding-up list:
+            (1) by what the model READ (mutually exclusive, sums to total), then a divider, then
+            (2) by REVIEW STATUS (cross-cutting — a "Model ra biển" case can still be "Chưa duyệt"). */}
         <div className="filter-tabs">
           {[
             ["ALL", "Tất cả", results.total],
-            ["RECOGNIZED", "Đọc được", results.counts.RECOGNIZED ?? 0],
-            ["REVIEW", "Cần xem lại", needReviewCount],
-            ["NO_PLATE", "Không biển", results.counts.NO_PLATE ?? 0],
-            ["CHECK", "Cần kiểm tra", needCheckCount],
-          ].map(([value, label, count]) => (
-            <button
-              className={filter === value ? "active" : ""}
-              key={value}
-              onClick={() => setFilter(value as Filter)}
-              type="button"
-            >
-              {label} <span>{count}</span>
-            </button>
-          ))}
+            ["RECOGNIZED", "Model ra biển", readCounts.reliable],
+            ["UNCERTAIN", "Đọc chưa chắc", readCounts.uncertain],
+            ["NO_PLATE", "Không biển", readCounts.noPlate],
+            ["DIVIDER", "", 0],
+            ["CHECK", "Cần xử lý", needCheckCount],
+          ].map(([value, label, count]) =>
+            value === "DIVIDER" ? (
+              <span aria-hidden className="filter-divider" key="divider" />
+            ) : (
+              <button
+                className={filter === value ? "active" : ""}
+                key={value}
+                onClick={() => setFilter(value as Filter)}
+                type="button"
+              >
+                {label} <span>{count}</span>
+              </button>
+            ),
+          )}
         </div>
       </div>
       </section>
@@ -710,16 +759,17 @@ export function ReviewPage({ job }: { job: Job }) {
                   title="Click bất kỳ đâu để tua video tới đúng vị trí đó"
                 >
                   {results.events.map((event) => {
-                    // Three timeline states: orange = needs a look (risky/disagreement); solid
-                    // green = all 3 readers agreed (cross-check confirmed); plain green = read but
-                    // not cross-check-confirmed. Gaps (nghi bỏ sót) are drawn separately.
+                    // Three timeline states, matching the tabs: orange = needs handling (risky);
+                    // dark green = a trustworthy read (RECOGNIZED or the AIs agreed ≥2/3 = "Model
+                    // ra biển"); light green = read but still uncertain ("Đọc chưa chắc"). Gaps
+                    // (nghi bỏ sót) are drawn separately.
                     const risky = needsReview(event);
-                    const confirmed = event.quality_flags.includes("OCR_UNANIMOUS");
+                    const reliable = isReliableRead(event);
                     const cls = risky
                       ? "ct-low_confidence ct-risky"
-                      : confirmed
+                      : reliable
                         ? "ct-verified"
-                        : `ct-${event.classification.toLowerCase()}`;
+                        : "ct-recognized";
                     return (
                       <span
                         className={`ct-seg ${cls}`}
@@ -733,7 +783,7 @@ export function ReviewPage({ job }: { job: Job }) {
                                   : "?")
                               } — cần xem lại (${toClock(event.start_timestamp_ms)})`
                             : `${event.normalized_plate ?? ""}${
-                                confirmed ? " — 3 nguồn khớp" : ""
+                                reliable ? " — đáng tin" : " — đọc chưa chắc"
                               } (${toClock(event.start_timestamp_ms)})`
                         }
                         style={{
@@ -782,13 +832,13 @@ export function ReviewPage({ job }: { job: Job }) {
                 )}
                 <div className="ct-legend">
                   <span>
-                    <i className="ct-sw ct-verified" /> 3 nguồn khớp (đáng tin)
+                    <i className="ct-sw ct-verified" /> Đáng tin (AI khớp)
                   </span>
                   <span>
-                    <i className="ct-sw ct-recognized" /> Đọc được (chưa kiểm chéo)
+                    <i className="ct-sw ct-recognized" /> Đọc chưa chắc
                   </span>
                   <span>
-                    <i className="ct-sw ct-low_confidence" /> Cần xem lại (gồm cả xe không biển)
+                    <i className="ct-sw ct-low_confidence" /> Cần xử lý (gồm xe không biển)
                   </span>
                   <span>
                     <i className="ct-gap-legend" /> Nghi bỏ sót
@@ -946,6 +996,10 @@ export function ReviewPage({ job }: { job: Job }) {
               cloudQualityAll={selected.cloud_quality_all}
               onChanged={() => setGtReload((value) => value + 1)}
               qualityDisagree={selected.quality_flags.includes("QUALITY_DISAGREEMENT")}
+              suspectNoPlate={
+                selected.quality_flags.includes("SUSPECTED_NON_PLATE") ||
+                selected.classification === "NO_PLATE"
+              }
               record={selectedGt}
             />
 
@@ -1092,12 +1146,12 @@ export function ReviewPage({ job }: { job: Job }) {
                 <button
                   className="button button-blue"
                   onClick={() => {
-                    setFilter("REVIEW");
+                    setFilter("CHECK");
                     setCrossResult(null);
                   }}
                   type="button"
                 >
-                  Xem “Cần xem lại” ({crossResult.disagree})
+                  Xem “Cần xử lý” ({crossResult.disagree})
                 </button>
               )}
             </div>
@@ -1130,18 +1184,26 @@ function GtPanel({
   cloudQuality,
   cloudQualityAll,
   qualityDisagree,
+  suspectNoPlate,
 }: {
   record: GroundTruthRecord | null;
   onChanged: () => void;
   cloudQuality?: string | null;
   cloudQualityAll?: string[];
   qualityDisagree?: boolean;
+  suspectNoPlate?: boolean;
 }) {
-  const [gtText, setGtText] = useState(record?.gt_text ?? record?.predicted_text ?? "");
+  // A no-plate case (real vehicle, no readable plate — or a logo/decal the OCR turned into a fake
+  // string) must NOT pre-fill that garbage as the GT, and its category defaults to "Xe không biển".
+  const [gtText, setGtText] = useState(
+    record?.gt_text ?? (suspectNoPlate ? "" : record?.predicted_text) ?? "",
+  );
   const [note, setNote] = useState(record?.note ?? "");
   // Prefill the category with AI-1's label as a SUGGESTION even when the two AIs disagree — the
   // reviewer just confirms it with one click (or changes it), never has to type from scratch.
-  const [quality, setQuality] = useState(record?.classification ?? cloudQuality ?? "");
+  const [quality, setQuality] = useState(
+    record?.classification ?? (suspectNoPlate ? NO_PLATE_OPTION : cloudQuality) ?? "",
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -1170,11 +1232,15 @@ function GtPanel({
       .finally(() => setBusy(false));
   };
 
+  const isNoPlate = quality === NO_PLATE_OPTION;
+  // For a no-plate vehicle, persist the sentinel GT string (the export renders it as "Xe không
+  // biển") instead of the empty box or a garbage logo read.
+  const gtToSave = isNoPlate ? NO_PLATE_GT : gtText;
   const save = () =>
-    run(() => patchGt(record.id, { gt_text: gtText, note, classification: quality }));
+    run(() => patchGt(record.id, { gt_text: gtToSave, note, classification: quality }));
   const verify = () =>
     run(async () => {
-      await patchGt(record.id, { gt_text: gtText, note, classification: quality });
+      await patchGt(record.id, { gt_text: gtToSave, note, classification: quality });
       await actionGt(record.id, "verify");
     });
   const discard = () => run(() => actionGt(record.id, "discard"));
@@ -1197,9 +1263,10 @@ function GtPanel({
       <label>
         GT Plate
         <input
+          disabled={isNoPlate}
           onChange={(event) => setGtText(event.target.value.toUpperCase())}
-          placeholder="Nhập biển số đúng"
-          value={gtText}
+          placeholder={isNoPlate ? "Xe không biển — không cần điền số" : "Nhập biển số đúng"}
+          value={isNoPlate ? "" : gtText}
         />
       </label>
       <label>
@@ -1213,7 +1280,12 @@ function GtPanel({
           ))}
         </select>
       </label>
-      {cloudQuality ? (
+      {suspectNoPlate ? (
+        <p className="quality-hint quality-hint-diff">
+          ⚠ Nghi <strong>xe không biển</strong> (OCR đọc nhầm từ logo/decal). Đã chọn "Xe không
+          biển" — không cần điền số; hoặc bấm <strong>Loại</strong> nếu không phải xe.
+        </p>
+      ) : cloudQuality ? (
         <p className={qualityDisagree ? "quality-hint quality-hint-diff" : "quality-hint"}>
           {qualityDisagree ? (
             // 1-1-1 split — the three AIs each said something different; show all so you decide.
@@ -1261,15 +1333,12 @@ function GtPanel({
       </div>
       <button
         className="button button-primary button-block"
-        disabled={busy || isVerified || !gtText.trim()}
+        disabled={busy || isVerified || (!gtText.trim() && !isNoPlate)}
         onClick={verify}
         type="button"
       >
         <Icon name="check" size={18} /> {isVerified ? "Đã xác nhận" : "Xác nhận GT"}
       </button>
-      <p className="backend-note">
-        Predicted: {record.predicted_text ?? "—"} · v{record.version} · reviewer mặc định.
-      </p>
     </section>
   );
 }

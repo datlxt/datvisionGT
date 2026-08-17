@@ -68,7 +68,7 @@ def run_cross_check(
     agree = disagree = unverified = 0
 
     # Phase 1 — gather every plate crop + its context (fast DB reads, main thread only).
-    work: list[tuple[Track, Detection, RecognitionResult | None, bytes]] = []
+    work: list[tuple[Track, Detection, RecognitionResult | None, bytes, float]] = []
     tracks = session.scalars(
         select(Track).where(Track.job_id == job.id, Track.object_type == "VEHICLE")
     ).all()
@@ -93,7 +93,9 @@ def run_cross_check(
                 RecognitionResult.stage == "TRACK_VOTE",
             )
         )
-        work.append((track, vehicle, recognition, image_bytes))
+        work.append(
+            (track, vehicle, recognition, image_bytes, plate.detection_confidence or 0.0)
+        )
 
     # Phase 2 — call the cloud readers for ALL plates CONCURRENTLY. This is pure network I/O
     # (the slow part), so a thread pool turns N sequential round-trips into N/CONCURRENCY — the
@@ -133,7 +135,7 @@ def run_cross_check(
         ]
 
     # Phase 3 — apply results + write flags (sequential, main thread — DB is not thread-safe).
-    for (track, vehicle, recognition, _image), (gpt, qwen, third) in zip(
+    for (track, vehicle, recognition, _image, plate_conf), (gpt, qwen, third) in zip(
         work, ai_reads, strict=True
     ):
         raw = dict(vehicle.raw_output or {})
@@ -175,17 +177,29 @@ def run_cross_check(
             else:
                 flags.append("OCR_DISAGREEMENT")  # no majority — a human decides
                 disagree += 1
-            # A crop the local model read a plate on but that BOTH reading AIs saw as empty is
-            # almost certainly NOT a plate (a logo / tail-light / sticker the detector fired on) —
-            # real plates get read by the AIs too. Flag it so the reviewer can quickly discard it.
+            # A crop the local model read a string on but that the cloud readers can't confirm is
+            # almost certainly NOT a plate (a logo / decal / tail-light the detector fired on) — real
+            # plates get read by the AIs too. Two triggers, both requiring the local read to exist:
+            #   (a) BOTH reading AIs saw NOTHING there — the classic false positive, OR
+            #   (b) at least ONE AI saw nothing, NONE backs the local string, and it was read from a
+            #       SINGLE frame — e.g. a YADEA logo the OCR turned into "19G20011" once while AI-1
+            #       reads empty and AI-2 hallucinates unrelated garbage. A real plate is read across
+            #       many frames and at least one AI lands on it.
             ai_present = [r for r in (gpt, qwen) if r is not None]
-            if (
-                len(ai_present) >= 2
-                and all(not reader.plate for reader in ai_present)
-                and recognition is not None
-                and recognition.predicted_text
-            ):
-                flags.append("SUSPECTED_NON_PLATE")
+            if recognition is not None and recognition.predicted_text and ai_present:
+                local_key = plate_key(recognition.predicted_text)
+                ai_keys = [plate_key(r.plate) for r in ai_present if r.plate]
+                any_ai_empty = any(not r.plate for r in ai_present)
+                no_ai_backs_local = local_key not in ai_keys
+                both_ai_empty = len(ai_present) >= 2 and not ai_keys
+                # The crop looks non-plate-ish on its own: read from a SINGLE frame, OR the plate
+                # DETECTOR itself was not confident it is a plate (a logo/decal fires with a low
+                # score). Either — combined with the readers failing to confirm — marks it a false
+                # plate. The detector-confidence arm also catches a STABLE logo read across many
+                # frames, not just a one-frame blip.
+                weak_shape = "SINGLE_READING_OCR" in flags or plate_conf < 0.50
+                if both_ai_empty or (any_ai_empty and no_ai_backs_local and weak_shape):
+                    flags.append("SUSPECTED_NON_PLATE")
             # (2) Quality classification by 2/3 MAJORITY across the THREE AIs (the local model has
             # no quality label, so only the AIs vote). Readers are grouped into coarse categories
             # ("bẩn"/"cũ,xước,mờ" → degrade, "che"/"dán" → occlusion…) so trivially different fine

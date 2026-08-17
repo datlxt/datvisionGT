@@ -5,10 +5,11 @@ import io
 import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from app.vision.media.reader import PyAVVideoReader, sha256_file
 from app.vision.media.sampling import FrameTimingAnalyzer, TimestampSampler
@@ -53,7 +54,44 @@ class EvidenceExtractor:
         jpeg_quality: int = 92,
         max_frames: int | None = None,
         progress_callback: Callable[[int, int | None], None] | None = None,
+        frame_callback: Callable[[Any, int, int | None], None] | None = None,
     ) -> EvidenceManifest:
+        """Extract evidence to disk and return the manifest (drains iter_extract)."""
+
+        generator = self.iter_extract(
+            source_path=source_path,
+            storage_root=storage_root,
+            job_id=job_id,
+            sample_rate=sample_rate,
+            pipeline_version=pipeline_version,
+            jpeg_quality=jpeg_quality,
+            max_frames=max_frames,
+            progress_callback=progress_callback,
+            frame_callback=frame_callback,
+        )
+        while True:
+            try:
+                next(generator)
+            except StopIteration as stop:
+                return stop.value
+
+    def iter_extract(
+        self,
+        *,
+        source_path: Path,
+        storage_root: Path,
+        job_id: str,
+        sample_rate: float = 4.0,
+        pipeline_version: str = "evidence-v1",
+        jpeg_quality: int = 92,
+        max_frames: int | None = None,
+        progress_callback: Callable[[int, int | None], None] | None = None,
+        frame_callback: Callable[[Any, int, int | None], None] | None = None,
+    ) -> "Iterator[tuple[Any, EvidenceFrame]]":
+        """Extract evidence AND yield each sampled frame as it is saved — so detection can run in
+        the SAME pass (boxes from the first frame, no decode→save→reload roundtrip). Yields
+        ``(bgr_ndarray, EvidenceFrame)`` per sampled frame and RETURNS the completed manifest."""
+
         if not SAFE_IDENTIFIER.fullmatch(job_id):
             raise ValueError("job_id must contain only letters, numbers, underscores, or hyphens")
         if not 1 <= jpeg_quality <= 100:
@@ -92,19 +130,28 @@ class EvidenceExtractor:
             storage_key = f"jobs/{job_id}/frames/{filename}"
             payload = _jpeg_bytes(frame.image, jpeg_quality)
             _atomic_write(frames_root / filename, payload)
-            evidence_frames.append(
-                EvidenceFrame(
-                    frame_index=frame.frame_index,
-                    pts=frame.pts,
-                    timestamp_us=frame.timestamp_us,
-                    target_timestamp_us=target_timestamp_us,
-                    width=frame.width,
-                    height=frame.height,
-                    storage_key=storage_key,
-                    sha256=hashlib.sha256(payload).hexdigest(),
-                    size_bytes=len(payload),
-                )
+            evidence_frame = EvidenceFrame(
+                frame_index=frame.frame_index,
+                pts=frame.pts,
+                timestamp_us=frame.timestamp_us,
+                target_timestamp_us=target_timestamp_us,
+                width=frame.width,
+                height=frame.height,
+                storage_key=storage_key,
+                sha256=hashlib.sha256(payload).hexdigest(),
+                size_bytes=len(payload),
             )
+            evidence_frames.append(evidence_frame)
+            bgr = frame.image.to_ndarray(format="bgr24")
+            # Hand the just-sampled frame to an optional consumer (the live preview) so the video is
+            # visible from the start of extraction instead of a dead wait. Best-effort.
+            if frame_callback is not None:
+                try:
+                    frame_callback(bgr, decoded_count, metadata.frame_count)
+                except Exception:
+                    pass
+            # Feed the SAME decoded frame to the detection pass in the caller — no reload needed.
+            yield bgr, evidence_frame
             if max_frames is not None and len(evidence_frames) >= max_frames:
                 break
 
