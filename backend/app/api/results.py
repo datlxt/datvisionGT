@@ -18,7 +18,6 @@ from app.export import (
     GtFinalRow,
     PlateReportRow,
     build_gt_final_workbook,
-    build_plate_report_workbook,
     workbook_to_bytes,
 )
 from app.models import (
@@ -74,6 +73,7 @@ class ResultList(BaseModel):
     counts: dict[str, int]
     events: list[EventResult]
     cross_check: dict[str, Any] | None = None  # background AI cross-check status/summary
+    missed_scan: dict[str, Any] | None = None  # AI missed-vehicle recall (soát bỏ sót) result
 
 
 def _artifact_url(job_id: uuid.UUID, artifact: Artifact) -> str:
@@ -532,6 +532,7 @@ def get_results(job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)])
         counts=counts,
         events=events,
         cross_check=(job.config_snapshot or {}).get("cross_check"),
+        missed_scan=(job.config_snapshot or {}).get("missed_scan"),
     )
 
 
@@ -683,19 +684,38 @@ def _event_to_report_row(
 def export_results_xlsx(
     job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)]
 ) -> StreamingResponse:
+    # Working export: SAME template as GT Final (build_gt_final_workbook) for a consistent layout,
+    # but includes every case NOT discarded (final keeps only verified). Discarded cases stay in the
+    # UI (restorable) yet must never appear in an export. Not-yet-verified cases carry the model read
+    # as a provisional "expected" so the sheet is usable mid-review.
     job, events = _load_results(job_id, session)
-    quality_by_track = {
-        record.track_id: record.classification or ""
+    records = {
+        record.track_id: record
         for record in session.scalars(
             select(GroundTruthRecord).where(GroundTruthRecord.job_id == job.id)
         ).all()
     }
-    rows = [
-        _event_to_report_row(job.id, event, quality_by_track.get(event.track_id, ""))
-        for event in events
-    ]
-    payload = workbook_to_bytes(build_plate_report_workbook(rows))
-    filename = f"{_path_safe(job.source_name)}_plate_report.xlsx"
+    rows: list[GtFinalRow] = []
+    for event in events:
+        record = records.get(event.track_id)
+        # Out of the export: cases the reviewer DISCARDED, or ones marked a duplicate of another
+        # (the final export drops these too). They stay in the UI (restorable) but are not GT.
+        if record is not None and (record.verify_status == "DISCARDED" or record.is_duplicate):
+            continue
+        confirmed = record and (record.normalized_gt_text or record.gt_text)
+        rows.append(
+            GtFinalRow(
+                gt_text=confirmed or event.normalized_plate or "",
+                classification=event.classification,
+                start_ms=event.start_timestamp_ms,
+                end_ms=event.end_timestamp_ms,
+                quality=(record.classification or "") if record else "",
+                full_frame_path=_evidence_path(job.id, "frames", event.full_frame_url),
+                crop_path=_evidence_path(job.id, "crops", event.plate_crop_url),
+            )
+        )
+    payload = workbook_to_bytes(build_gt_final_workbook(rows))
+    filename = f"{_path_safe(job.source_name)}_GT_review.xlsx"
     return StreamingResponse(
         iter([payload]),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -752,6 +772,16 @@ def cross_check_ocr(
             "auto_verified": auto_verified,
         },
     )
+    # Refresh the missed-vehicle recall (soát bỏ sót) too, so the "nghi bỏ sót" timeline stays in
+    # sync after a manual re-check. Best-effort — never blocks the cross-check result.
+    from app.workers.missed import scan_missed_vehicles, set_missed_status
+
+    try:
+        set_missed_status(session, job, {"status": "running", "candidates": []})
+        set_missed_status(session, job, scan_missed_vehicles(session, job, settings))
+    except Exception:
+        session.rollback()
+        set_missed_status(session, job, {"status": "error", "candidates": []})
     return CrossCheckSummary(
         checked=agree + disagree + unverified,
         agree=agree,

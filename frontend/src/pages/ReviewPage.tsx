@@ -174,6 +174,7 @@ const FLAG_META: Record<string, { label: string; tone: "warn" | "info" | "ok" }>
   OCR_UNVERIFIED: { label: "Chưa kiểm chéo", tone: "info" },
   OCR_AGREE: { label: "AI khớp", tone: "ok" },
   QUALITY_AGREE: { label: "Phân loại khớp", tone: "ok" },
+  AUTO_VERIFIED_REPEATED: { label: "Trùng biển — đã tự duyệt (soi lại nếu cần)", tone: "info" },
 };
 
 function friendlyFlags(flags: string[]) {
@@ -318,10 +319,17 @@ export function ReviewPage({ job }: { job: Job }) {
       );
   }, [job.id, reloadToken]);
 
-  // Auto-refresh while the background AI cross-check runs, so its results appear on their own.
+  // Auto-refresh while the background AI cross-check OR the missed-vehicle recall runs, so their
+  // results (agreement flags, then the refined "nghi bỏ sót" gaps) appear on their own. The recall
+  // runs right after the cross-check finishes, so keep polling until it is done too.
   useEffect(() => {
-    const status = results?.cross_check?.status;
-    if (status !== "pending" && status !== "running") return;
+    const ccStatus = results?.cross_check?.status;
+    const missedStatus = results?.missed_scan?.status;
+    const ccActive = ccStatus === "pending" || ccStatus === "running";
+    // Recall is queued/running (set "pending" the moment the cross-check task starts) → keep polling
+    // until it reports "done"/"error". Legacy jobs never get this key, so they don't poll.
+    const missedActive = missedStatus === "pending" || missedStatus === "running";
+    if (!ccActive && !missedActive) return;
     const timer = setTimeout(() => setReloadToken((value) => value + 1), 4000);
     return () => clearTimeout(timer);
   }, [results]);
@@ -411,22 +419,37 @@ export function ReviewPage({ job }: { job: Job }) {
   );
 
   // Gaps between consecutive cases where no vehicle was published — the prime spots to
-  // scrub for a missed vehicle instead of watching the whole clip.
+  // scrub for a missed vehicle instead of watching the whole clip. Once the AI missed-vehicle
+  // recall has run (missed_scan.status === "done"), we show ONLY the gaps it CONFIRMED still hold
+  // a vehicle — with the exact frame + timestamp it saw — so the QC never scrubs an empty gap. If
+  // the scan hasn't run / errored, we fall back to every raw time-gap (nothing is hidden).
+  const missedScan = results?.missed_scan ?? null;
   const suspectedGaps = useMemo(() => {
+    type Gap = { start: number; end: number; ts: number; frameUrl?: string; confirmed: boolean };
+    if (missedScan?.status === "done") {
+      return missedScan.candidates.map<Gap>((c) => ({
+        start: c.start_ms,
+        end: c.end_ms,
+        ts: c.ts_ms,
+        frameUrl: c.frame_url,
+        confirmed: true,
+      }));
+    }
     const ordered = [...(results?.events ?? [])].sort(
       (a, b) => a.start_timestamp_ms - b.start_timestamp_ms,
     );
-    const gaps: { start: number; end: number }[] = [];
+    const gaps: Gap[] = [];
     let cursor = 0;
     for (const event of ordered) {
       if (event.start_timestamp_ms - cursor >= 6_000) {
-        gaps.push({ start: cursor, end: event.start_timestamp_ms });
+        gaps.push({ start: cursor, end: event.start_timestamp_ms, ts: cursor, confirmed: false });
       }
       cursor = Math.max(cursor, event.end_timestamp_ms);
     }
-    if (totalMs - cursor >= 6_000) gaps.push({ start: cursor, end: totalMs });
+    if (totalMs - cursor >= 6_000)
+      gaps.push({ start: cursor, end: totalMs, ts: cursor, confirmed: false });
     return gaps;
-  }, [results, totalMs]);
+  }, [missedScan, results, totalMs]);
 
   function seekVideo(ms: number) {
     if (videoRef.current) {
@@ -456,6 +479,10 @@ export function ReviewPage({ job }: { job: Job }) {
     setSelectedId(trackId);
     setEvidenceTab("video");
     if (videoRef.current) {
+      // Clicking a case = REVIEW that case: pause and jump to its start so the selection stays put.
+      // (While playing, the follow-effect would keep re-selecting the track under the playhead —
+      // that was the "click a case, it jumps around / seeks away" mess.) Press play to watch.
+      videoRef.current.pause();
       videoRef.current.currentTime = startMs / 1000;
     }
   }
@@ -813,21 +840,44 @@ export function ReviewPage({ job }: { job: Job }) {
                   <span className="ct-now">▶ {formatTime(videoMs)}</span>
                   <span>{formatTime(totalMs)}</span>
                 </div>
+                {(missedScan?.status === "running" || missedScan?.status === "pending") && (
+                  <div className="ct-gaps-list ct-scan-running">
+                    <Icon name="clock" size={14} /> AI đang soát bỏ sót các khoảng trống…
+                  </div>
+                )}
                 {suspectedGaps.length > 0 && (
                   <div className="ct-gaps-list">
                     <span className="ct-gaps-title">
-                      <span className="ct-gap-legend" /> Nghi bỏ sót ({suspectedGaps.length}):
+                      <span className="ct-gap-legend" />{" "}
+                      {missedScan?.status === "done"
+                        ? `AI xác nhận có xe (${suspectedGaps.length})`
+                        : `Nghi bỏ sót (${suspectedGaps.length})`}
+                      :
                     </span>
                     {suspectedGaps.map((gap) => (
                       <button
-                        className="ct-gap-chip"
+                        className={`ct-gap-chip${gap.confirmed ? " ct-gap-chip-ai" : ""}`}
                         key={gap.start}
-                        onClick={() => seekVideo(gap.start)}
+                        onClick={() => seekVideo(gap.ts)}
+                        title={
+                          gap.confirmed
+                            ? "AI thấy có xe trong khoảng này — tua tới khung AI thấy"
+                            : "Khoảng trống — tua tới đầu khoảng để tự soát"
+                        }
                         type="button"
                       >
-                        {formatTime(gap.start)}–{formatTime(gap.end)}
+                        {gap.frameUrl && (
+                          <img alt="" className="ct-gap-thumb" src={gap.frameUrl} />
+                        )}
+                        {gap.confirmed ? formatTime(gap.ts) : `${formatTime(gap.start)}–${formatTime(gap.end)}`}
                       </button>
                     ))}
+                  </div>
+                )}
+                {missedScan?.status === "done" && suspectedGaps.length === 0 && (
+                  <div className="ct-gaps-list ct-scan-clean">
+                    <Icon name="check" size={14} /> AI đã soát {missedScan.gaps ?? 0} khoảng trống —
+                    không phát hiện xe bị bỏ sót.
                   </div>
                 )}
                 <div className="ct-legend">
@@ -996,10 +1046,8 @@ export function ReviewPage({ job }: { job: Job }) {
               cloudQualityAll={selected.cloud_quality_all}
               onChanged={() => setGtReload((value) => value + 1)}
               qualityDisagree={selected.quality_flags.includes("QUALITY_DISAGREEMENT")}
-              suspectNoPlate={
-                selected.quality_flags.includes("SUSPECTED_NON_PLATE") ||
-                selected.classification === "NO_PLATE"
-              }
+              suspectNoPlate={selected.classification === "NO_PLATE"}
+              suspectLogo={selected.quality_flags.includes("SUSPECTED_NON_PLATE")}
               record={selectedGt}
             />
 
@@ -1185,6 +1233,7 @@ function GtPanel({
   cloudQualityAll,
   qualityDisagree,
   suspectNoPlate,
+  suspectLogo,
 }: {
   record: GroundTruthRecord | null;
   onChanged: () => void;
@@ -1192,9 +1241,11 @@ function GtPanel({
   cloudQualityAll?: string[];
   qualityDisagree?: boolean;
   suspectNoPlate?: boolean;
+  suspectLogo?: boolean;
 }) {
-  // A no-plate case (real vehicle, no readable plate — or a logo/decal the OCR turned into a fake
-  // string) must NOT pre-fill that garbage as the GT, and its category defaults to "Xe không biển".
+  // Only a GENUINE no-plate case (the pipeline found no plate at all) defaults to "Xe không biển"
+  // with an empty GT. A "suspected logo" (SUSPECTED_NON_PLATE) still has a real plate read, so we
+  // KEEP that read and only hint the reviewer to check it — never auto-blank a real plate.
   const [gtText, setGtText] = useState(
     record?.gt_text ?? (suspectNoPlate ? "" : record?.predicted_text) ?? "",
   );
@@ -1284,6 +1335,11 @@ function GtPanel({
         <p className="quality-hint quality-hint-diff">
           ⚠ Nghi <strong>xe không biển</strong> (OCR đọc nhầm từ logo/decal). Đã chọn "Xe không
           biển" — không cần điền số; hoặc bấm <strong>Loại</strong> nếu không phải xe.
+        </p>
+      ) : suspectLogo ? (
+        <p className="quality-hint quality-hint-diff">
+          ⚠ Nghi <strong>logo/không phải biển</strong> — nhìn kỹ crop. <strong>CÓ biển</strong> thì
+          giữ/sửa số đã điền; đúng là <strong>logo</strong> thì chọn "Xe không biển" hoặc bấm Loại.
         </p>
       ) : cloudQuality ? (
         <p className={qualityDisagree ? "quality-hint quality-hint-diff" : "quality-hint"}>

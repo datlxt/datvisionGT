@@ -177,28 +177,20 @@ def run_cross_check(
             else:
                 flags.append("OCR_DISAGREEMENT")  # no majority — a human decides
                 disagree += 1
-            # A crop the local model read a string on but that the cloud readers can't confirm is
-            # almost certainly NOT a plate (a logo / decal / tail-light the detector fired on) — real
-            # plates get read by the AIs too. Two triggers, both requiring the local read to exist:
-            #   (a) BOTH reading AIs saw NOTHING there — the classic false positive, OR
-            #   (b) at least ONE AI saw nothing, NONE backs the local string, and it was read from a
-            #       SINGLE frame — e.g. a YADEA logo the OCR turned into "19G20011" once while AI-1
-            #       reads empty and AI-2 hallucinates unrelated garbage. A real plate is read across
-            #       many frames and at least one AI lands on it.
+            # A crop is a suspected NON-plate (logo / decal / tail-light) ONLY when the plate
+            # DETECTOR itself was not confident it is a plate (a logo fires with a low score) AND the
+            # cloud readers can't confirm the local read. A REAL plate the AIs merely failed to read
+            # is NOT flagged — the detector is confident, so the value is kept and just sent to a
+            # human. (Before, "both AIs empty" alone flagged real hard plates like 89AA0027 as
+            # non-plate; the detector-confidence gate fixes that.)
             ai_present = [r for r in (gpt, qwen) if r is not None]
             if recognition is not None and recognition.predicted_text and ai_present:
                 local_key = plate_key(recognition.predicted_text)
                 ai_keys = [plate_key(r.plate) for r in ai_present if r.plate]
                 any_ai_empty = any(not r.plate for r in ai_present)
                 no_ai_backs_local = local_key not in ai_keys
-                both_ai_empty = len(ai_present) >= 2 and not ai_keys
-                # The crop looks non-plate-ish on its own: read from a SINGLE frame, OR the plate
-                # DETECTOR itself was not confident it is a plate (a logo/decal fires with a low
-                # score). Either — combined with the readers failing to confirm — marks it a false
-                # plate. The detector-confidence arm also catches a STABLE logo read across many
-                # frames, not just a one-frame blip.
-                weak_shape = "SINGLE_READING_OCR" in flags or plate_conf < 0.50
-                if both_ai_empty or (any_ai_empty and no_ai_backs_local and weak_shape):
+                looks_non_plate = plate_conf < 0.50  # detector unsure it's a plate → logo/decal/light
+                if looks_non_plate and any_ai_empty and no_ai_backs_local:
                     flags.append("SUSPECTED_NON_PLATE")
             # (2) Quality classification by 2/3 MAJORITY across the THREE AIs (the local model has
             # no quality label, so only the AIs vote). Readers are grouped into coarse categories
@@ -252,6 +244,11 @@ def cross_check_job(job_id: str) -> dict[str, int | str]:
         job = session.get(ProcessingJob, uuid.UUID(str(job_id)))
         if job is None:
             return {"skipped": "job_not_found"}
+        # Mark the recall pending up front so the review UI knows to keep polling for it (and legacy
+        # jobs, which never get this key, don't poll forever).
+        from app.workers.missed import set_missed_status
+
+        set_missed_status(session, job, {"status": "pending", "candidates": []})
         agree, disagree, unverified = run_cross_check(session, job, settings)
         # Fast-track the unanimous (all 3 readers agree) cases automatically — the reviewer only
         # deals with disagreements. Lazy import avoids a module-load cycle with the API layer.
@@ -270,6 +267,17 @@ def cross_check_job(job_id: str) -> dict[str, int | str]:
                 "auto_verified": auto_verified,
             },
         )
+        # Missed-vehicle recall (soát bỏ sót): AI re-scans the empty detection gaps to tell the QC
+        # which are real misses. Best-effort — a failure leaves the gaps as plain time-gaps and can
+        # never affect the cross-check result above.
+        from app.workers.missed import scan_missed_vehicles, set_missed_status
+
+        try:
+            set_missed_status(session, job, {"status": "running", "candidates": []})
+            set_missed_status(session, job, scan_missed_vehicles(session, job, settings))
+        except Exception:
+            session.rollback()
+            set_missed_status(session, job, {"status": "error", "candidates": []})
     return {
         "agree": agree,
         "disagree": disagree,

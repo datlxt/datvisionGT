@@ -243,34 +243,30 @@ def stream_live_preview(job_id: uuid.UUID) -> StreamingResponse:
 
     settings = get_settings()
     key = live.live_key(str(job_id))
-    ev_key = live.events_key(str(job_id))
     _ACTIVE = ("DRAFT", "PENDING", "QUEUED", "PROCESSING")
 
     def generator():
         conn = Redis.from_url(settings.redis_url)
         last: bytes | None = None
-        ev_sent = 0
         ticks = 0
-        for _ in range(2400):  # hard cap ~6 min so a stray stream can't run forever
+        # Stream up to ~20 min per connection, then just RETURN (no "done") so the browser's
+        # EventSource silently reconnects and continues — long videos take longer than any single
+        # connection, and the old 6-min "done" cap froze the live view mid-way. Only a genuinely
+        # finished job ends the stream with "done".
+        # Poll fast (~12/s) so the smoother, higher-fps preview is delivered without stutter.
+        for _ in range(15000):  # 15000 * 0.08s ≈ 20 min per connection
             data = conn.get(key)
             if data is not None and data != last:
                 last = data
                 yield f"data: {data.decode('utf-8')}\n\n"
-            # Deliver any newly finished-vehicle cards (crop + full frame) as a separate event type.
-            ev_len = conn.llen(ev_key)
-            if ev_len > ev_sent:
-                for item in conn.lrange(ev_key, ev_sent, ev_len - 1):
-                    yield f"event: detection\ndata: {item.decode('utf-8')}\n\n"
-                ev_sent = ev_len
             ticks += 1
-            if ticks % 13 == 0:  # ~every 2s: end the stream once processing has finished
+            if ticks % 25 == 0:  # ~every 2s: end the stream once processing has finished
                 with SessionLocal() as check:
                     job = check.get(ProcessingJob, job_id)
                     if job is None or job.status not in _ACTIVE:
                         yield "event: done\ndata: {}\n\n"
                         return
-            time.sleep(0.15)
-        yield "event: done\ndata: {}\n\n"
+            time.sleep(0.08)
 
     return StreamingResponse(
         generator(),

@@ -97,6 +97,17 @@ export type ResultList = {
     unverified?: number;
     auto_verified?: number;
   } | null;
+  missed_scan?: {
+    status: "pending" | "running" | "done" | "error";
+    gaps?: number;
+    scanned?: number;
+    candidates: {
+      start_ms: number;
+      end_ms: number;
+      ts_ms: number;
+      frame_url: string;
+    }[];
+  } | null;
 };
 
 export type VerifyStatus = "UNVERIFIED" | "IN_REVIEW" | "VERIFIED" | "DISCARDED";

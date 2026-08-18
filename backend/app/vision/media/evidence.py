@@ -87,6 +87,7 @@ class EvidenceExtractor:
         max_frames: int | None = None,
         progress_callback: Callable[[int, int | None], None] | None = None,
         frame_callback: Callable[[Any, int, int | None], None] | None = None,
+        preview_callback: Callable[[Any, int, int | None], None] | None = None,
     ) -> "Iterator[tuple[Any, EvidenceFrame]]":
         """Extract evidence AND yield each sampled frame as it is saved — so detection can run in
         the SAME pass (boxes from the first frame, no decode→save→reload roundtrip). Yields
@@ -124,6 +125,14 @@ class EvidenceExtractor:
             timing.observe(frame.timestamp_us)
             target_timestamp_us = sampler.select(frame.timestamp_us)
             if target_timestamp_us is None:
+                # Not a sampled frame: hand it to the smoothing preview (image-only) so the live
+                # video plays at a higher fps than the sample rate. The callback throttles BEFORE
+                # converting, so we don't pay the ndarray cost for frames it drops.
+                if preview_callback is not None:
+                    try:
+                        preview_callback(frame.image, decoded_count, metadata.frame_count)
+                    except Exception:
+                        pass
                 continue
 
             filename = f"{len(evidence_frames):06d}_{frame.timestamp_us:012d}.jpg"

@@ -50,6 +50,10 @@ class RearCameraConfig:
     # Lane travel direction ("up"/"down"/"left"/"right") or None. Only flags wrong-direction
     # tracks for review; never drops a real vehicle.
     lane_direction: str | None = None
+    # Same plate seen again WITHIN this gap = fragments of one pass (merge); BEYOND it = a separate
+    # pass kept as its own row + flagged REPEATED_PLATE. Cars idle longer at a gate and take longer
+    # to leave-and-return, so the worker widens this for car lanes.
+    cross_plate_merge_gap_ms: int = 90_000
 
 
 def _center_in_region(
@@ -114,7 +118,9 @@ class MotorcyclePlatePipeline:
                     pass
         for track in self.tracker.flush():
             _finish(track)
-        return consolidate_vehicle_events(results)
+        return consolidate_vehicle_events(
+            results, cross_plate_merge_gap_ms=self.config.cross_plate_merge_gap_ms
+        )
 
     def _observe(self, frame: PipelineFrame) -> list[FrameObservation]:
         height, width = frame.bgr.shape[:2]

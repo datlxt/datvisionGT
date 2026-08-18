@@ -170,9 +170,9 @@ export function ExportsPage({
                         <a
                           className="button button-primary button-compact export-btn"
                           href={`/api/v1/jobs/${job.id}/export.xlsx`}
-                          title="Bản nháp: TẤT CẢ case model + Confidence, để soát/đối chiếu bằng mắt"
+                          title="Bản nháp: MỌI case (trừ đã Loại), GT tạm = biển model đọc. Cùng bố cục với GT Final."
                         >
-                          <Icon name="download" size={16} /> Plate Report
+                          <Icon name="download" size={16} /> GT (đang làm)
                         </a>
                       ) : (
                         <button

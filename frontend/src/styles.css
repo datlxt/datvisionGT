@@ -1647,6 +1647,44 @@ code {
   background: #fee2e2;
 }
 
+/* AI-confirmed missed vehicle: stronger (amber) + a thumbnail of the frame the AI saw. */
+.ct-gap-chip-ai {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #b45309;
+  padding-left: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ct-gap-chip-ai:hover {
+  background: #fef3c7;
+}
+
+.ct-gap-thumb {
+  width: 34px;
+  height: 24px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #fcd34d;
+}
+
+.ct-scan-running,
+.ct-scan-clean {
+  font-size: 12px;
+  font-weight: 600;
+  gap: 6px;
+}
+
+.ct-scan-running {
+  color: #b45309;
+}
+
+.ct-scan-clean {
+  color: #15803d;
+}
+
 .row-actions {
   display: flex;
   align-items: center;
@@ -2109,6 +2147,24 @@ code {
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.02em;
+}
+
+/* Banner while the pipeline finishes (tracking/vote + AI cross-check) so the frozen last live
+   frame doesn't look like the job hung. */
+.live-finishing {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .live-plates {

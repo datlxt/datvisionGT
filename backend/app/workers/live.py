@@ -12,18 +12,29 @@ from __future__ import annotations
 import base64
 import json
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 import cv2
 
-# Cap the publish rate so JPEG-encoding a preview never steals cycles from detection, and shrink the
-# frame hard — the browser only needs a small picture to draw boxes on.
-_MIN_INTERVAL_S = 0.18  # ~5 fps
-_PREVIEW_WIDTH = 480
-_JPEG_QUALITY = 70
+# The heavy resize+JPEG-encode runs on a DEDICATED thread, not the detection thread — OpenCV releases
+# the GIL, so it genuinely runs in parallel and adds almost no cost to processing. That lets us push
+# a higher, smoother frame rate. A frame is DROPPED (never queued) if the encoder is still busy, so
+# the stream stays "latest only" and never backs up.
+_MIN_INTERVAL_S = 0.10  # ~10 fps target for the smoothing previews
+_PREVIEW_WIDTH = 720  # sharper (still ~15-20KB/frame; encode is off the detection thread)
+_JPEG_QUALITY = 82
 
 # Per-process wall-clock of the last publish, keyed by job id (throttle state).
 _last_emit: dict[str, float] = {}
+# One background encoder; the latest in-flight encode task per job (to drop frames when busy).
+_encoder = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-encode")
+_inflight: dict[str, Future] = {}
+
+
+def _busy(job_id: str) -> bool:
+    task = _inflight.get(job_id)
+    return task is not None and not task.done()
 
 
 def live_key(job_id: str) -> str:
@@ -48,14 +59,29 @@ def publish_frame(
     progress: float,
     roi: list[float] | tuple[float, ...] | None = None,
 ) -> None:
-    """Publish one preview snapshot to Redis. Never raises."""
+    """Queue a detected frame (WITH boxes) for the background encoder. Box frames arrive at the
+    sample rate (~2 fps) and must always show, so they're submitted even if the encoder is busy."""
 
     try:
-        now = time.monotonic()
-        if now - _last_emit.get(job_id, 0.0) < _MIN_INTERVAL_S:
-            return
-        _last_emit[job_id] = now
+        _last_emit[job_id] = time.monotonic()  # gate intermediate previews after a real box frame
+        _inflight[job_id] = _encoder.submit(
+            _encode_frame, rconn, job_id, bgr, list(observations), progress, roi
+        )
+    except Exception:
+        pass
 
+
+def _encode_frame(
+    rconn: Any,
+    job_id: str,
+    bgr: Any,
+    observations: list[Any],
+    progress: float,
+    roi: list[float] | tuple[float, ...] | None = None,
+) -> None:
+    """Resize + JPEG-encode + publish (runs on the encoder thread). Never raises."""
+
+    try:
         height, width = bgr.shape[:2]
         if width <= 0 or height <= 0:
             return
@@ -110,6 +136,66 @@ def publish_frame(
         rconn.set(live_key(job_id), json.dumps(payload), ex=30)
     except Exception:
         # A preview hiccup must never affect the offline pipeline.
+        pass
+
+
+def should_publish_preview(job_id: str) -> bool:
+    """Throttle gate for the smoothing preview — checked BEFORE converting a frame to ndarray so we
+    never pay the conversion for a frame we'd drop. Also reset by publish_frame, so an intermediate
+    frame never overwrites a fresh box frame too soon."""
+
+    now = time.monotonic()
+    if now - _last_emit.get(job_id, 0.0) < _MIN_INTERVAL_S:
+        return False
+    _last_emit[job_id] = now
+    return True
+
+
+def publish_preview(
+    rconn: Any, job_id: str, bgr: Any, progress: float, roi: Any = None
+) -> None:
+    """Queue an image-only INTERMEDIATE frame for the background encoder to smooth the video between
+    detections. DROPPED if the encoder is still busy, so it never queues up / blocks anything."""
+
+    try:
+        if _busy(job_id):
+            return
+        _inflight[job_id] = _encoder.submit(_encode_preview, rconn, job_id, bgr, progress, roi)
+    except Exception:
+        pass
+
+
+def _encode_preview(
+    rconn: Any, job_id: str, bgr: Any, progress: float, roi: Any = None
+) -> None:
+    """Image-only INTERMEDIATE frame (no boxes) — smooths the live video between detected frames.
+    The frontend keeps the last boxes when a payload has no 'boxes' field. Never raises."""
+
+    try:
+        height, width = bgr.shape[:2]
+        if width <= 0 or height <= 0:
+            return
+        scale = _PREVIEW_WIDTH / width
+        pw, ph = _PREVIEW_WIDTH, max(1, round(height * scale))
+        small = cv2.resize(bgr, (pw, ph))
+        ok, buf = cv2.imencode(".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), _JPEG_QUALITY])
+        if not ok:
+            return
+        payload: dict[str, Any] = {
+            "progress": round(progress, 1),
+            "w": pw,
+            "h": ph,
+            "img": base64.b64encode(buf).decode("ascii"),
+        }
+        if roi is not None and len(roi) == 4:
+            payload["roi"] = [
+                round(roi[0] * pw),
+                round(roi[1] * ph),
+                round(roi[2] * pw),
+                round(roi[3] * ph),
+            ]
+        rconn.set(live_key(job_id), json.dumps(payload), ex=30)
+    except Exception:
         pass
 
 

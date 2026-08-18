@@ -253,3 +253,91 @@ def read_plate_third(image_bytes: bytes, settings: Settings) -> CloudReading | N
         model=settings.reader_c_ocr_model,
         timeout=settings.cloud_ocr_timeout_s,
     )
+
+
+# --- Missed-vehicle recall (soát bỏ sót) ----------------------------------------------------------
+# A SAFETY-NET second reader run AFTER processing: for each long detection gap the pipeline left
+# empty, we crop the lane (ROI) from a sampled full frame and ask an AI "is there a vehicle here?".
+# It NEVER writes GT or a plate — it only refines the "nghi bỏ sót" timeline so the QC looks at gaps
+# a human actually needs to, and ignores gaps that are genuinely empty road.
+_VEHICLE_CHECK_PROMPT = (
+    "Đây là ảnh cắt từ camera một LÀN xe (trạm thu phí / bãi gửi xe), nhìn từ phía sau xe.\n"
+    "Trong ảnh có MỘT CHIẾC XE (xe máy hoặc ô tô) đang nằm trong làn không?\n"
+    "- Chỉ tính xe rõ ràng đang ở trong làn. Bỏ qua: người đi bộ, bóng đổ, vệt sáng, cột/biển hiệu,"
+    " một phần rất nhỏ ở mép ảnh, hay làn trống.\n"
+    "Trả về JSON thuần: {\"vehicle\": true/false, \"confidence\": 0..1}. "
+    "vehicle=true CHỈ khi bạn chắc chắn có xe trong làn."
+)
+
+
+def check_vehicle_present(
+    image_bytes: bytes, *, base_url: str, api_key: str, model: str, timeout: float
+) -> bool | None:
+    """Ask a vision model whether the (already ROI-cropped) frame contains a vehicle in the lane.
+
+    Returns True/False, or None on any network/parse failure so the caller treats the gap as
+    "not scanned" (kept as a plain time-gap) rather than dropping a possible miss.
+    """
+
+    if not api_key:
+        return None
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _VEHICLE_CHECK_PROMPT},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
+                    },
+                ],
+            }
+        ],
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(
+        url=f"{base_url.rstrip('/')}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    parsed = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            content = body["choices"][0]["message"]["content"]
+            if not content:
+                return None
+            parsed = json.loads(content)
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code in (429, 500, 502, 503, 504) and attempt < _MAX_RETRIES - 1:
+                time.sleep(0.8 * (attempt + 1))
+                continue
+            return None
+        except (urllib.error.URLError, OSError, TimeoutError):
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(0.6 * (attempt + 1))
+                continue
+            return None
+        except (KeyError, IndexError, ValueError, TypeError):
+            return None
+    if parsed is None:
+        return None
+    return bool(parsed.get("vehicle"))
+
+
+def check_vehicle_openai(image_bytes: bytes, settings: Settings) -> bool | None:
+    """Missed-vehicle recall via the primary (AI-1) reader. One AI is enough for a yes/no."""
+
+    return check_vehicle_present(
+        image_bytes,
+        base_url=settings.openai_base_url,
+        api_key=settings.openai_api_key if settings.openai_available else "",
+        model=settings.openai_ocr_model,
+        timeout=settings.cloud_ocr_timeout_s,
+    )

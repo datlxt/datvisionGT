@@ -521,14 +521,24 @@ def auto_verify_unanimous(job_id: uuid.UUID, session: Session) -> int:
         consensus = _consensus_plate(event)
         if (
             "OCR_AGREE" not in event.quality_flags  # ≥2 of 3 readers agree (incl. unanimous)
-            or not event.normalized_plate
+            # Use the CONSENSUS (whatever ≥2 readers agree on) — not the local read specifically.
+            # When the local model fails but both cloud AIs read the SAME plate, that is still a
+            # trustworthy 2-reader agreement; requiring local here wrongly blocked those cases.
             or consensus is None
             # If the two AIs disagree on the plate QUALITY category, keep it in "Cần xem lại" so a
             # human picks the category — the plate is agreed but the category still needs a person.
             or "QUALITY_DISAGREEMENT" in event.quality_flags
-            # Same plate seen again elsewhere, or a special (military/diplomatic) plate — a human
-            # confirms those first.
-            or "REPEATED_PLATE" in event.quality_flags
+            # A repeated plate needs a human ONLY when the read isn't unanimous. When all three
+            # readers agree on the SAME plate for both far-apart passes, it is the same vehicle
+            # re-entering (two different vehicles cannot share a real plate, and 3 independent
+            # readers won't unanimously misread two plates to the same string) — the 90s split
+            # already kept them as separate valid rows, so it is auto-verified (marked so it can be
+            # spot-checked). A non-unanimous repeat still goes to a human.
+            or (
+                "REPEATED_PLATE" in event.quality_flags
+                and "OCR_UNANIMOUS" not in event.quality_flags
+            )
+            # A special (military/diplomatic) plate — a human confirms those first.
             or "SPECIAL_PLATE" in event.quality_flags
         ):
             continue
@@ -546,12 +556,16 @@ def auto_verify_unanimous(job_id: uuid.UUID, session: Session) -> int:
         # left blank for a human — we don't guess quality when the readers conflict.
         if "QUALITY_AGREE" in event.quality_flags and event.cloud_quality:
             record.classification = event.cloud_quality
-        marker = (
+        markers = {
             "AUTO_VERIFIED_UNANIMOUS"
             if "OCR_UNANIMOUS" in event.quality_flags
             else "AUTO_VERIFIED_MAJORITY"
-        )
-        record.quality_flags = sorted({*record.quality_flags, marker})
+        }
+        # Tag re-entries auto-verified from a unanimous repeated plate so the reviewer can filter
+        # and spot-check them.
+        if "REPEATED_PLATE" in event.quality_flags:
+            markers.add("AUTO_VERIFIED_REPEATED")
+        record.quality_flags = sorted({*record.quality_flags, *markers})
         try:
             gt.apply_verify(session, record, reviewer=reviewer)
             verified += 1

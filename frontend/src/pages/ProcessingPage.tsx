@@ -240,7 +240,7 @@ type LiveFrame = {
   img: string;
   w: number;
   h: number;
-  boxes: LiveBox[];
+  boxes?: LiveBox[];
   progress: number;
   roi?: number[];
 };
@@ -265,7 +265,14 @@ function LiveView({
     const source = new EventSource(`/api/v1/jobs/${jobId}/live`);
     source.onmessage = (event) => {
       try {
-        setFrame(JSON.parse(event.data) as LiveFrame);
+        const data = JSON.parse(event.data) as LiveFrame;
+        // Intermediate (image-only) frames carry no "boxes" — hold the last detected boxes/ROI so
+        // the video plays smoothly with the boxes kept between detections.
+        setFrame((prev) =>
+          data.boxes === undefined && prev
+            ? { ...data, boxes: prev.boxes, roi: data.roi ?? prev.roi }
+            : data,
+        );
       } catch {
         /* ignore a malformed frame */
       }
@@ -335,6 +342,14 @@ function LiveView({
         <span className="live-badge">
           ● LIVE{frame ? ` · ${Math.round(frame.progress)}%` : ""}
         </span>
+        {/* After detection (≈90%+) the live feed stops while tracking/vote + AI cross-check finish.
+            Show a clear banner so the frozen last frame doesn't look like the job hung. */}
+        {progress >= 90 && (
+          <div className="live-finishing">
+            <Icon name="clock" size={16} /> Đã detect xong — đang gộp lượt + đối chiếu AI… (gần
+            xong, đợi chút)
+          </div>
+        )}
       </div>
     </div>
   );
