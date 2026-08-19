@@ -181,15 +181,36 @@ def _merge_persisted_motion_candidates(
     events = reviewed_events
 
     plated = [event for event in events if event.plate_detection_count > 0]
+
+    def _is_plated_fragment(event: EventResult) -> bool:
+        # A no-plate event is a FRAGMENT of a plated pass (not its own vehicle) when it OVERLAPS one,
+        # OR — for a WEAK fragment (fewer than min_no_plate_detections observations, e.g. a lone
+        # single-frame tracker re-detection of a vehicle idling at the barrier) — when it sits within
+        # no_plate_gap_ms of one. This drops the false "xe không biển" split off an already-detected
+        # vehicle (e.g. an e-bike read once as a plate, then re-detected 8s later with no plate)
+        # WITHOUT touching a REAL no-plate vehicle, which has >= min_no_plate_detections observations.
+        # A HUMAN-added case (MANUAL_…) is ground truth the reviewer just asserted — NEVER drop it.
+        if event.track_code.startswith("MANUAL"):
+            return False
+        weak = event.vehicle_detection_count < min_no_plate_detections
+        for pe in plated:
+            overlaps = (
+                event.start_timestamp_ms <= pe.end_timestamp_ms
+                and event.end_timestamp_ms >= pe.start_timestamp_ms
+            )
+            near = (
+                weak
+                and event.start_timestamp_ms <= pe.end_timestamp_ms + no_plate_gap_ms
+                and event.end_timestamp_ms >= pe.start_timestamp_ms - no_plate_gap_ms
+            )
+            if overlaps or near:
+                return True
+        return False
+
     events = [
         event
         for event in events
-        if event.plate_detection_count > 0
-        or not any(
-            event.start_timestamp_ms <= plate_event.end_timestamp_ms
-            and event.end_timestamp_ms >= plate_event.start_timestamp_ms
-            for plate_event in plated
-        )
+        if event.plate_detection_count > 0 or not _is_plated_fragment(event)
     ]
     candidates = [
         event
@@ -447,7 +468,22 @@ def _merge_persisted_motion_candidates(
                 "quality_flags": sorted(flags),
             }
         )
-    return unique_events
+
+    # Logo / decal misread as a plate: when BOTH the plate detector and the AI readers distrust the
+    # read (SUSPECTED_NON_PLATE) and it never became a confident RECOGNIZED plate, present the vehicle
+    # as NO_PLATE instead of showing the fabricated string. A sticker/logo must not masquerade as a
+    # plate — and this is what split one e-bike into a "plated" case + a "no-plate" case.
+    final_events: list[EventResult] = []
+    for event in unique_events:
+        if (
+            "SUSPECTED_NON_PLATE" in event.quality_flags
+            and event.classification != "RECOGNIZED"
+        ):
+            event = event.model_copy(
+                update={"classification": "NO_PLATE", "normalized_plate": None}
+            )
+        final_events.append(event)
+    return final_events
 
 
 def _load_results(job_id: uuid.UUID, session: Session) -> tuple[ProcessingJob, list[EventResult]]:
@@ -819,6 +855,31 @@ def trigger_missed_scan(
         "app.workers.missed.missed_scan_job", str(job.id), job_timeout="1h", result_ttl=3600
     )
     return {"status": "queued"}
+
+
+class MissedDismissRequest(BaseModel):
+    ts_ms: int
+
+
+@router.post("/{job_id}/missed-scan/dismiss")
+def dismiss_missed_candidate(
+    job_id: uuid.UUID,
+    payload: MissedDismissRequest,
+    session: Annotated[Session, Depends(get_db)],
+) -> dict[str, str]:
+    """Drop ONE AI-confirmed missed-vehicle gap from the timeline — used when it's a false positive,
+    or after the reviewer has added it to GT (so it no longer shows as a pending suspected miss)."""
+
+    job = session.get(ProcessingJob, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+    from app.workers.missed import set_missed_status
+
+    scan = (job.config_snapshot or {}).get("missed_scan")
+    if isinstance(scan, dict):
+        kept = [c for c in scan.get("candidates", []) if c.get("ts_ms") != payload.ts_ms]
+        set_missed_status(session, job, {**scan, "candidates": kept})
+    return {"status": "dismissed"}
 
 
 def _path_safe(name: str) -> str:

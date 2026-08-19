@@ -77,12 +77,22 @@ _CIVILIAN_PLATE_RE = re.compile(r"\d{2}[A-Z][A-Z0-9]?\d{4,5}")
 # suffix (…RM / …BM). Covers AB-12-34, AB-123, ABS-12-34, ABL-12-34, ABX-12-34, AB-123RM, AB-123BM.
 _MILITARY_PLATE_RE = re.compile(r"[A-Z]{2,3}\d{3,5}(?:RM|BM)?")
 _DIPLOMATIC_PLATE_RE = re.compile(r"\d{2,5}(?:NG|NN|QT|CV|LD)\d{2,5}")
+# Electric two-wheeler (xe điện): a TWO-letter 'MĐ' series (Đ→D so it reads 'MD') + a 5-6 digit
+# block, e.g. 29-MĐ2-232.94 → 29MD223294. Regular motorbikes carry a ONE-letter series, so a 2-letter
+# 'MD' head is the electric marker. The civilian grammar only allows a 4-5 digit block, so the longer
+# electric plates were wrongly rejected; recognise them so a correct read is accepted, kept out of the
+# civilian glyph-repair, and flagged for a human (local OCR reads this rare series poorly).
+_ELECTRIC_PLATE_RE = re.compile(r"\d{2}MD\d{4,6}")
 
 
 def is_special_plate(value: str) -> bool:
-    """Military / diplomatic / foreign plate whose layout differs from the civilian grammar."""
+    """Military / diplomatic / foreign / electric plate whose layout differs from civilian grammar."""
 
-    return bool(_MILITARY_PLATE_RE.fullmatch(value) or _DIPLOMATIC_PLATE_RE.fullmatch(value))
+    return bool(
+        _MILITARY_PLATE_RE.fullmatch(value)
+        or _DIPLOMATIC_PLATE_RE.fullmatch(value)
+        or _ELECTRIC_PLATE_RE.fullmatch(value)
+    )
 
 
 def is_plausible_vietnamese_plate(value: str) -> bool:

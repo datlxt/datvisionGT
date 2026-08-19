@@ -4,6 +4,7 @@ import { GtCompareDialog } from "../components/GtCompareDialog";
 import { Icon } from "../components/Icon";
 import { MissedCaseDialog } from "../components/MissedCaseDialog";
 import {
+  ConfirmDialog,
   EmptyState,
   ErrorState,
   LoadingState,
@@ -488,7 +489,69 @@ export function ReviewPage({ job }: { job: Job }) {
 
   // Which AI-confirmed gap the reviewer clicked open (shows the AI's finding for that moment).
   const [openGapKey, setOpenGapKey] = useState<number | null>(null);
+  const [gapBusy, setGapBusy] = useState(false);
+  const [confirmDismissTs, setConfirmDismissTs] = useState<number | null>(null);
   const openGap = suspectedGaps.find((gap) => gap.start === openGapKey) ?? null;
+
+  async function dismissGap(tsMs: number) {
+    // Remove this gap from the "nghi bỏ sót" timeline (false positive, or already added to GT).
+    await api(`/api/v1/jobs/${job.id}/missed-scan/dismiss`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ts_ms: tsMs }),
+    });
+  }
+
+  async function addGapToGt(gap: NonNullable<typeof openGap>) {
+    // Create an evidence-backed GT case for a real missed vehicle (anchored to the nearest frame),
+    // then drop the gap so it no longer shows as pending. No plate seen → LPN_NO_PLATE_VEHICLE.
+    if (gapBusy) return;
+    setGapBusy(true);
+    try {
+      const record = await api<{ track_id: string }>(
+        `/api/v1/jobs/${job.id}/ground-truth/manual`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            timestamp_ms: gap.ts,
+            end_timestamp_ms: gap.end,
+            gt_text: gap.hasPlate && gap.plate ? gap.plate : "",
+            no_plate: !gap.hasPlate,
+          }),
+        },
+      );
+      await dismissGap(gap.ts);
+      setOpenGapKey(null);
+      // Jump straight to the new case: select it in the left list + move the video to that exact
+      // moment. The manual-select guard stops playback-follow from yanking the selection away.
+      manualSelectUntil.current = Date.now() + 3000;
+      setSelectedId(record.track_id);
+      seekVideo(gap.ts);
+      setReloadToken((value) => value + 1);
+      // Reload the GT records too — the manual case is created VERIFIED, so refreshing here makes it
+      // show as verified immediately (out of "Cần xử lý", no "đang tạo GT draft" wait).
+      setGtReload((value) => value + 1);
+    } catch {
+      /* leave the panel open so the reviewer can retry */
+    } finally {
+      setGapBusy(false);
+    }
+  }
+
+  async function removeGap(tsMs: number) {
+    if (gapBusy) return;
+    setGapBusy(true);
+    try {
+      await dismissGap(tsMs);
+      setOpenGapKey(null);
+      setReloadToken((value) => value + 1);
+    } catch {
+      /* ignore */
+    } finally {
+      setGapBusy(false);
+    }
+  }
 
   function seekVideo(ms: number) {
     if (videoRef.current) {
@@ -756,30 +819,40 @@ export function ReviewPage({ job }: { job: Job }) {
               <p>Mỗi track là một lượt xe do model tạo.</p>
             </header>
             <div className="track-list" ref={trackListRef}>
-              {filteredEvents.map((event) => (
-                <button
-                  className={`track-item ${event.track_id === selected.track_id ? "active" : ""}`}
-                  data-track-id={event.track_id}
-                  key={event.track_id}
-                  onClick={() => selectTrack(event.track_id, event.start_timestamp_ms)}
-                  type="button"
-                >
-                  <img
-                    alt={`Evidence ${event.track_code}`}
-                    src={event.plate_crop_url ?? event.vehicle_crop_url}
-                  />
-                  <span>
-                    <strong>{resultLabel(event)}</strong>
-                    <small>{event.track_code}</small>
-                    <small>
-                      {formatTime(event.start_timestamp_ms)} · {confidence(event.confidence)}
-                    </small>
-                  </span>
-                  <StatusBadge tone={classificationTone(event)}>
-                    {event.classification === "RECOGNIZED" ? "OCR" : "Xem"}
-                  </StatusBadge>
-                </button>
-              ))}
+              {filteredEvents.map((event) => {
+                const rec = gtByTrack.get(event.track_id);
+                const discarded = rec?.verify_status === "DISCARDED" || rec?.is_duplicate;
+                return (
+                  <button
+                    className={`track-item ${event.track_id === selected.track_id ? "active" : ""}${
+                      discarded ? " track-item-discarded" : ""
+                    }`}
+                    data-track-id={event.track_id}
+                    key={event.track_id}
+                    onClick={() => selectTrack(event.track_id, event.start_timestamp_ms)}
+                    type="button"
+                  >
+                    <img
+                      alt={`Evidence ${event.track_code}`}
+                      src={event.plate_crop_url ?? event.vehicle_crop_url}
+                    />
+                    <span>
+                      <strong>{resultLabel(event)}</strong>
+                      <small>{event.track_code}</small>
+                      <small>
+                        {formatTime(event.start_timestamp_ms)} · {confidence(event.confidence)}
+                      </small>
+                    </span>
+                    {discarded ? (
+                      <StatusBadge tone="duplicate">Đã loại</StatusBadge>
+                    ) : (
+                      <StatusBadge tone={classificationTone(event)}>
+                        {event.classification === "RECOGNIZED" ? "OCR" : "Xem"}
+                      </StatusBadge>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </aside>
 
@@ -829,7 +902,12 @@ export function ReviewPage({ job }: { job: Job }) {
                     // dark green = a trustworthy read (RECOGNIZED or the AIs agreed ≥2/3 = "Model
                     // ra biển"); light green = read but still uncertain ("Đọc chưa chắc"). Gaps
                     // (nghi bỏ sót) are drawn separately.
-                    const risky = needsReview(event);
+                    // A case is orange ONLY while it still needs a human — once VERIFIED (auto or
+                    // manual) it is handled, so it drops back to its read colour. This keeps the
+                    // orange count on the bar identical to the "Cần xử lý" tab (both = not verified).
+                    const verified =
+                      gtByTrack.get(event.track_id)?.verify_status === "VERIFIED";
+                    const risky = needsReview(event) && !verified;
                     const reliable = isReliableRead(event);
                     const cls = risky
                       ? "ct-low_confidence ct-risky"
@@ -960,6 +1038,25 @@ export function ReviewPage({ job }: { job: Job }) {
                           </li>
                         )}
                       </ul>
+                      <div className="gap-detail-actions">
+                        <button
+                          className="button button-primary button-compact"
+                          disabled={gapBusy}
+                          onClick={() => addGapToGt(openGap)}
+                          type="button"
+                        >
+                          <Icon name="plus" size={15} /> Thêm vào GT
+                        </button>
+                        <button
+                          className="button button-secondary button-compact"
+                          disabled={gapBusy}
+                          onClick={() => setConfirmDismissTs(openGap.ts)}
+                          type="button"
+                          title="Không phải xe bỏ sót — xoá khỏi danh sách"
+                        >
+                          <Icon name="trash" size={15} /> Xoá
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1311,6 +1408,21 @@ export function ReviewPage({ job }: { job: Job }) {
           onClose={() => setShowMissed(false)}
         />
       )}
+
+      <ConfirmDialog
+        busy={gapBusy}
+        cancelLabel="Không"
+        confirmLabel="Xoá"
+        description="Xoá khoảng này khỏi danh sách nghi bỏ sót? (dùng khi AI báo nhầm — không phải xe bị bỏ sót)"
+        onCancel={() => setConfirmDismissTs(null)}
+        onConfirm={() => {
+          const ts = confirmDismissTs;
+          setConfirmDismissTs(null);
+          if (ts != null) removeGap(ts);
+        }}
+        open={confirmDismissTs !== null}
+        title="Xoá khoảng nghi bỏ sót?"
+      />
     </section>
   );
 }

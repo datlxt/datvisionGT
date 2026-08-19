@@ -88,6 +88,12 @@ _PROMPT = (
     "Bạn là chuyên gia đọc biển số xe máy Việt Nam từ ảnh crop biển.\n"
     "1) Đọc CHÍNH XÁC ký tự (chỉ A-Z và 0-9, bỏ dấu gạch/chấm, gộp 2 dòng thành 1 chuỗi; "
     "Đ đọc thành D). Không đọc được thì để plate rỗng.\n"
+    "   BIỂN ĐẶC BIỆT — đọc ĐÚNG như thấy, KHÔNG ép về biển thường:\n"
+    "   • Xe điện: series 2 CHỮ 'MĐ' (đọc thành 'MD'), phần số có thể tới 6 chữ số"
+    " (vd 29-MĐ2-232.94 → '29MD223294'). Đừng bỏ bớt chữ số.\n"
+    "   • Ngoại giao/nước ngoài/quốc tế: có 'NG' / 'NN' / 'QT' / 'CV' / 'LD' nằm GIỮA hai nhóm số"
+    " (vd 41-291-NG-01 → '41291NG01', 80-NN-167-76 → '80NN16776') — giữ nguyên 2 chữ đó.\n"
+    "   • Quân đội (biển đỏ): 2-3 CHỮ đầu rồi tới số (vd KA-1234, ABS-12-34) — không có số tỉnh.\n"
     "2) Phân loại chất lượng: chọn ĐÚNG MỘT nhãn ứng với KHIẾM KHUYẾT NỔI BẬT NHẤT,"
     " theo tiêu chí:\n"
     + _QUALITY_CRITERIA

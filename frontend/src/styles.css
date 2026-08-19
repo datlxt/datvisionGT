@@ -1759,6 +1759,12 @@ code {
   color: #b45309 !important;
 }
 
+.gap-detail-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .row-actions {
   display: flex;
   align-items: center;
@@ -2897,6 +2903,20 @@ code {
 .track-item.active {
   border-color: #9ad53f;
   background: #f7fceb;
+}
+
+/* Discarded case: dim it so the reviewer sees at a glance it was removed (restorable). */
+.track-item-discarded {
+  opacity: 0.55;
+}
+
+.track-item-discarded strong {
+  text-decoration: line-through;
+  text-decoration-color: #b91c1c;
+}
+
+.track-item-discarded.active {
+  opacity: 0.8;
 }
 
 .track-item img {
