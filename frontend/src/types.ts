@@ -106,6 +106,12 @@ export type ResultList = {
       end_ms: number;
       ts_ms: number;
       frame_url: string;
+      vehicle?: boolean;
+      has_plate?: boolean;
+      plate?: string;
+      vehicle_type?: string;
+      in_list?: boolean;
+      plate_elsewhere_ms?: number | null;
     }[];
   } | null;
 };

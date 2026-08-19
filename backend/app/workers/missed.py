@@ -1,11 +1,16 @@
-"""Missed-vehicle recall (soát bỏ sót) — a background SAFETY-NET run after cross-check.
+"""Missed-vehicle recall (soát bỏ sót) — an INDEPENDENT background safety-net.
+
+It runs on its OWN background task (``missed_scan_job``), enqueued right after a job reaches review —
+NOT folded into the AI cross-check — so the "nghi bỏ sót" bar fills on its own without the reviewer
+waiting on (or even running) the plate cross-check.
 
 The offline pipeline only emits a vehicle event when its detector + tracker are confident. This
 step does the OPPOSITE check: for every long detection GAP the pipeline left empty, it crops the
-lane (ROI) from a few sampled full frames and asks ONE cloud AI "is there a vehicle here?".
+lane (ROI) from a few sampled full frames and asks ONE cloud AI "is there a vehicle here, and if so
+read any plate?".
 
 - AI says YES  → keep the gap on the reviewer's "nghi bỏ sót" timeline (a possible missed pass),
-  attaching the frame the AI saw so the QC can confirm and add the case.
+  attaching the frame the AI saw + the plate it read + whether that moment is already in the list.
 - AI says NO   → drop the gap; the road was genuinely empty, so the QC never wastes a look on it.
 
 It NEVER writes GT, a plate, or an event — it only annotates the job so the QC's attention is
@@ -15,6 +20,7 @@ simply leaves the gaps un-scanned (they fall back to plain time-gaps on the time
 
 from __future__ import annotations
 
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 import cv2
@@ -22,15 +28,31 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
+from app.db.session import SessionLocal
 from app.models import Artifact, ProcessingJob, Track
-from app.vision.plate.cloud_ocr import check_vehicle_openai
+from app.models.recognition import RecognitionResult
+from app.vision.plate.cloud_ocr import read_gap_vehicle_openai
+from app.vision.plate.domain import plate_key
 
 # A gap must be at least this long to be worth scanning — matches the frontend "nghi bỏ sót" bar.
 _MIN_GAP_MS = 6_000
+# Each detected vehicle interval is padded by this on EACH side before computing gaps, so a car's
+# lead-in / standstill overhang (its track can end while it still idles at the barrier) is treated as
+# "covered" — otherwise the brief empty stretch next to a detected car gets flagged as a false miss.
+# Net effect: only stretches empty for more than ~(2×pad + min gap) become candidates. 6s → a real
+# gap must exceed ~18s (measured from the previous vehicle's track END to the next one's START).
+_OVERHANG_PAD_MS = 6_000
 # Ignore this much at each gap edge: a vehicle detected right up to the boundary is often still
 # leaving/entering frame there, so sampling the edge would re-flag an already-counted pass.
 _EDGE_MARGIN_MS = 2_000
+# If the AI reads a plate in a gap that matches a detected vehicle within this window, it is the SAME
+# pass (a car idling past its track's end), not a miss — so the gap is dropped.
+_SAME_PASS_WINDOW_MS = 90_000
+# A sighting within this many ms of a detected vehicle's edge is that car's lead-in / standstill
+# overhang (its track can end while it still idles at the barrier), NOT a miss — so it's dropped.
+# This is the main filter, since the AI usually can't read the small/far plate in a wide gap frame.
+_ADJACENT_VEHICLE_MS = 15_000
 # Sampled frames probed per gap (evenly spaced across the gap). One YES is enough to keep the gap.
 _SAMPLES_PER_GAP = 3
 # Hard cap on AI calls per job so a pathological (long, sparse) video can't run up cost / time.
@@ -82,15 +104,53 @@ def _detected_intervals(session: Session, job: ProcessingJob) -> list[tuple[int,
     return merged
 
 
-def _gaps(intervals: list[tuple[int, int]], duration_ms: int) -> list[tuple[int, int]]:
-    """Empty stretches (no detected vehicle) at least ``_MIN_GAP_MS`` long, including the lead-in
-    before the first vehicle and the tail after the last."""
+def _detected_plates(session: Session, job: ProcessingJob) -> list[tuple[str, int, int]]:
+    """Every detected plate as (plate_key, start_ms, end_ms) — used to tell the reviewer whether a
+    plate the recall AI read is ALREADY in the list (and, if elsewhere, at what time)."""
 
+    rows = session.execute(
+        select(
+            RecognitionResult.predicted_text,
+            Track.start_timestamp_ms,
+            Track.end_timestamp_ms,
+        )
+        .join(Track, Track.id == RecognitionResult.track_id)
+        .where(
+            Track.job_id == job.id,
+            RecognitionResult.stage == "TRACK_VOTE",
+            RecognitionResult.predicted_text.is_not(None),
+        )
+    ).all()
+    out: list[tuple[str, int, int]] = []
+    for text, start, end in rows:
+        key = plate_key(text or "")
+        if key:
+            out.append((key, int(start), int(end)))
+    return out
+
+
+def _gaps(intervals: list[tuple[int, int]], duration_ms: int) -> list[tuple[int, int]]:
+    """Empty stretches (no detected vehicle) worth flagging as a possible miss.
+
+    Each detected interval is PADDED by ``_OVERHANG_PAD_MS`` first: a car's lead-in and its standstill
+    overhang (its track can end while it still idles at the barrier) count as "covered", so the brief
+    empty stretch right next to a detected car is NOT wrongly flagged. Only a stretch that stays empty
+    AFTER padding — genuinely far from any detected car, i.e. long enough to hide a real missed pass —
+    becomes a candidate. Includes the lead-in before the first vehicle and the tail after the last.
+    """
+
+    padded: list[tuple[int, int]] = []
+    for start, end in intervals:
+        s, e = start - _OVERHANG_PAD_MS, end + _OVERHANG_PAD_MS
+        if padded and s <= padded[-1][1]:
+            padded[-1] = (padded[-1][0], max(padded[-1][1], e))
+        else:
+            padded.append((s, e))
     gaps: list[tuple[int, int]] = []
     prev_end = 0
-    for start, end in intervals:
+    for start, end in padded:
         if start - prev_end >= _MIN_GAP_MS:
-            gaps.append((prev_end, start))
+            gaps.append((max(0, prev_end), start))
         prev_end = max(prev_end, end)
     if duration_ms and duration_ms - prev_end >= _MIN_GAP_MS:
         gaps.append((prev_end, duration_ms))
@@ -138,6 +198,7 @@ def scan_missed_vehicles(session: Session, job: ProcessingJob, settings: Setting
 
     roi = _roi_norm(job)
     intervals = _detected_intervals(session, job)
+    detected_plates = _detected_plates(session, job)
     duration = int(job.duration_ms or 0)
     gaps = _gaps(intervals, duration)
     if not gaps:
@@ -171,20 +232,67 @@ def scan_missed_vehicles(session: Session, job: ProcessingJob, settings: Setting
     if not probes:
         return {"status": "done", "gaps": len(gaps), "scanned": 0, "candidates": []}
 
-    # Phase 2 — ask the AI for every probe CONCURRENTLY (pure network I/O).
+    # Phase 2 — ask the AI for every probe CONCURRENTLY (pure network I/O). The AI reports whether a
+    # vehicle is present AND, if so, reads any visible plate.
     with ThreadPoolExecutor(max_workers=_RECALL_CONCURRENCY) as pool:
-        verdicts = list(pool.map(lambda item: check_vehicle_openai(item[3], settings), probes))
+        readings = list(pool.map(lambda item: read_gap_vehicle_openai(item[3], settings), probes))
 
-    # Phase 3 — first YES per gap becomes a confirmed missed-vehicle candidate.
+    def _covered(ts: int) -> bool:
+        # Is this exact moment already a detected event? (By timestamp — a SAME plate at a DIFFERENT
+        # time is a different pass and does NOT count as "already in the list".)
+        return any(start <= ts <= end for start, end in intervals)
+
+    def _near_detected(ts: int) -> bool:
+        # True if ts is within _ADJACENT_VEHICLE_MS of a detected vehicle's interval — i.e. the
+        # lead-in or standstill overhang of an already-detected car, not a genuine missed pass.
+        return any(
+            start - _ADJACENT_VEHICLE_MS <= ts <= end + _ADJACENT_VEHICLE_MS
+            for start, end in intervals
+        )
+
+    def _plate_elsewhere(plate: str, ts: int) -> int | None:
+        # If the AI read a plate, is that plate in the list at ANOTHER time? Return the nearest such
+        # time (info only — helps the reviewer see it's a re-entry of a known plate, not this moment).
+        key = plate_key(plate)
+        if not key:
+            return None
+        centers = [
+            (start + end) // 2 for pkey, start, end in detected_plates if pkey == key
+        ]
+        return min(centers, key=lambda c: abs(c - ts)) if centers else None
+
+    # Phase 3 — first frame with a vehicle per gap becomes a confirmed missed-vehicle candidate.
     confirmed: dict[int, dict] = {}
-    for (gap_idx, ts, key, _crop), verdict in zip(probes, verdicts, strict=True):
-        if verdict and gap_idx not in confirmed:
+    for (gap_idx, ts, key, _crop), reading in zip(probes, readings, strict=True):
+        if reading and reading.get("vehicle") and gap_idx not in confirmed:
+            # Drop the lead-in / standstill overhang of an already-detected car: a car that idles at
+            # the barrier stays in frame PAST its track's end, so the gap right after keeps showing it
+            # (e.g. 21D00519: track ends 10:26, still parked at 10:28). A real miss is a vehicle deep
+            # in an empty stretch, far from any detected car. This filter works even when the AI can't
+            # read the plate from the wide gap frame (which is the usual case).
+            if _near_detected(ts):
+                continue
             filename = key.rsplit("/", 1)[-1]
+            plate = reading.get("plate") or ""
+            nearest_same_plate = _plate_elsewhere(plate, ts) if plate else None
+            # Also drop if a READ plate matches a detected vehicle within one pass-window (±90s) —
+            # belt-and-suspenders for the rare case the AI does read the overhang car's plate.
+            if (
+                nearest_same_plate is not None
+                and abs(nearest_same_plate - ts) <= _SAME_PASS_WINDOW_MS
+            ):
+                continue
             confirmed[gap_idx] = {
                 "start_ms": gaps[gap_idx][0],
                 "end_ms": gaps[gap_idx][1],
                 "ts_ms": ts,
                 "frame_url": f"/api/v1/evidence/{job.id}/frames/{filename}",
+                "vehicle": True,
+                "has_plate": bool(plate),
+                "plate": plate,
+                "vehicle_type": reading.get("vehicle_type") or "",
+                "in_list": _covered(ts),
+                "plate_elsewhere_ms": nearest_same_plate,
             }
     candidates = [confirmed[i] for i in sorted(confirmed)]
     return {
@@ -193,3 +301,26 @@ def scan_missed_vehicles(session: Session, job: ProcessingJob, settings: Setting
         "scanned": len(probes),
         "candidates": candidates,
     }
+
+
+def missed_scan_job(job_id: str) -> dict:
+    """RQ task: run the missed-vehicle recall for a job IN THE BACKGROUND, independent of the AI
+    cross-check. Enqueued right after the job reaches review so the "nghi bỏ sót" bar fills on its
+    own. Never raises — a failure just marks the scan errored."""
+
+    settings = get_settings()
+    if not settings.cloud_ocr_available:
+        return {"skipped": "cloud_ocr_unavailable"}
+    with SessionLocal() as session:
+        job = session.get(ProcessingJob, uuid.UUID(str(job_id)))
+        if job is None:
+            return {"skipped": "job_not_found"}
+        try:
+            set_missed_status(session, job, {"status": "running", "candidates": []})
+            result = scan_missed_vehicles(session, job, settings)
+            set_missed_status(session, job, result)
+            return {"candidates": len(result.get("candidates", []))}
+        except Exception:
+            session.rollback()
+            set_missed_status(session, job, {"status": "error", "candidates": []})
+            return {"error": True}

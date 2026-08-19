@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import Detection, GroundTruthRecord, ReviewAction, User
@@ -172,8 +173,15 @@ def materialize_draft_record(
         verify_status="UNVERIFIED",
         evidence_status="VALID",
     )
-    session.add(record)
-    session.flush()
+    # A stale MODEL record from an earlier consolidation can already hold this record_code (an old
+    # merge reassigned a different track's code to it). Insert inside a SAVEPOINT so that collision
+    # only skips this one draft instead of 500-ing the whole GT listing.
+    try:
+        with session.begin_nested():
+            session.add(record)
+            session.flush()
+    except IntegrityError:
+        return None
     _record_action(session, record, action="CREATE", before={}, actor_id=None)
     return record
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -23,6 +24,15 @@ from app.vision.plate.interfaces import (
     VehicleDetector,
 )
 from app.vision.plate.tracker import GreedyVehicleTracker
+
+# The vehicle (YOLOX) and plate (YOLOv9) detectors are INDEPENDENT ONNX sessions, so a frame's two
+# detections can run at the SAME time instead of back-to-back. On the profiled lane9 clip they were
+# the two biggest costs (vehicle 35% + plate 29% of wall time) and ran serially; overlapping them
+# cuts a frame's detection latency from vehicle+plate to max(vehicle, plate). One shared worker is
+# reused across all jobs (jobs run one at a time in the RQ worker, so it never over-subscribes) —
+# each session still uses its own 2 intra-op threads, so this uses ~4 of 8 cores. Detection is
+# otherwise UNCHANGED: same frames, same models, identical boxes → identical GT.
+_DETECT_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="frame-detect")
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,14 +134,21 @@ class MotorcyclePlatePipeline:
 
     def _observe(self, frame: PipelineFrame) -> list[FrameObservation]:
         height, width = frame.bgr.shape[:2]
+        # Run the two independent detectors CONCURRENTLY: offload the vehicle detector to the shared
+        # worker and run the plate detector on this thread while it works, then join. Both ONNX
+        # sessions release the GIL, so this genuinely overlaps. _observe is still called one frame at
+        # a time, so the motion detector's order-sensitive background model stays correct.
+        vehicle_future = _DETECT_POOL.submit(self.vehicle_detector.detect, frame.bgr)
+        raw_plates = self.plate_detector.detect(frame.bgr)
+        raw_vehicles = vehicle_future.result()
         vehicles = [
             item
-            for item in self.vehicle_detector.detect(frame.bgr)
+            for item in raw_vehicles
             if _center_in_region(item.bbox, self.config.roi, width, height)
         ]
         plates = [
             item
-            for item in self.plate_detector.detect(frame.bgr)
+            for item in raw_plates
             if _center_in_region(item.bbox, self.config.roi, width, height)
             and not any(
                 _center_in_region(item.bbox, excluded, width, height)

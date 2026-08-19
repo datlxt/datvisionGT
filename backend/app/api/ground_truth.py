@@ -50,6 +50,32 @@ def _sync_job_review_status(session: Session, job_id: uuid.UUID) -> None:
 
 def _materialize_records(session: Session, job: ProcessingJob, events: list[EventResult]) -> None:
     current = {event.track_id for event in events}
+    code_by_track = {event.track_id: event.track_code for event in events}
+    # Realign stale record_codes. An older merge stored some MODEL records under ANOTHER track's code
+    # (it reassigned track_code while merging), so a record's code no longer matches its own track.
+    # That mis-set code blocks the real owner of that code from getting its draft (unique record_code)
+    # — and the owner's case would vanish from review. Point each record back at its own track's code
+    # (two-phase via temp codes so no transient duplicate during the flush).
+    existing_model = list(
+        session.scalars(
+            select(GroundTruthRecord).where(
+                GroundTruthRecord.job_id == job.id,
+                GroundTruthRecord.record_source == "MODEL",
+            )
+        ).all()
+    )
+    misaligned = [
+        record
+        for record in existing_model
+        if code_by_track.get(record.track_id) not in (None, record.record_code)
+    ]
+    if misaligned:
+        for record in misaligned:
+            record.record_code = f"__realign_{record.id}"
+        session.flush()
+        for record in misaligned:
+            record.record_code = code_by_track[record.track_id]
+        session.flush()
     for event in events:
         gt.materialize_draft_record(
             session,

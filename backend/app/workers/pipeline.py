@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import queue
+import threading
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,6 +43,42 @@ _VEHICLE_COCO_CLASSES: dict[str, tuple[tuple[int, ...], str]] = {
     "motorcycle": ((1, 3), "motorcycle"),
     "car": ((2, 5, 7), "car"),
 }
+
+
+def _prefetch(source: Iterator[Any], buffer: int = 4) -> Iterator[Any]:
+    """Run ``source`` on a PRODUCER thread so the NEXT frame decodes/encodes while the current one
+    is being detected.
+
+    In the fused loop, frame extraction (PyAV decode + JPEG encode + ndarray — ~30% of wall time)
+    and detection (ONNX — ~64%) ran back-to-back on one thread. Extraction releases the GIL and uses
+    different hardware than ONNX, so overlapping them hides most of the extract cost under detection.
+    Order is preserved (a FIFO queue), and the source's exceptions (e.g. ``EvidenceCancelled`` on
+    cancel) and its side effects (the manifest it stashes before returning) propagate to the caller.
+    """
+
+    channel: queue.Queue = queue.Queue(maxsize=buffer)
+    done = object()
+    error: list[BaseException] = []
+
+    def _produce() -> None:
+        try:
+            for item in source:
+                channel.put(("item", item))
+        except BaseException as exc:  # propagate cancellation / decode errors to the consumer
+            error.append(exc)
+        finally:
+            channel.put((done, None))
+
+    thread = threading.Thread(target=_produce, name="frame-prefetch", daemon=True)
+    thread.start()
+    while True:
+        kind, item = channel.get()
+        if kind is done:
+            break
+        yield item
+    thread.join()
+    if error:
+        raise error[0]
 
 
 def _model_path(root: Path, relative: str) -> Path:
@@ -195,9 +234,18 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
                 confidence_threshold=vehicle_conf,
                 intra_op_threads=settings.model_intra_op_threads,
             )
-            vehicle_detector = CompositeVehicleDetector(
-                [semantic_vehicle_detector, FixedCameraMotionDetector()]
-            )
+            # MOG2 motion is a RECALL fallback for two-wheelers YOLOX misses when seen steeply from
+            # above — but it fires on ANY moving blob (a motorbike, e-bike, cyclist, even a person),
+            # so in the CAR lane it wrongly captures a passing motorbike as a NO_PLATE vehicle. Cars
+            # are large and reliably found by YOLOX, so the car lane uses the SEMANTIC detector alone
+            # (only COCO car/bus/truck) → two-wheelers stay out. The motorcycle lane keeps motion so
+            # it still catches bicycles / e-bikes / cargo bikes (with or without a plate).
+            if vehicle_type == "car":
+                vehicle_detector = semantic_vehicle_detector
+            else:
+                vehicle_detector = CompositeVehicleDetector(
+                    [semantic_vehicle_detector, FixedCameraMotionDetector()]
+                )
             alpr = FastAlprPlateEngine(
                 detector_path,
                 ocr_path,
@@ -250,18 +298,18 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
                     job.progress = min(90.0, 1.0 + decoded / total * 89.0)
                 session.commit()
 
+            # Steady-cadence smoothing preview: the decode callback only RECORDS the latest frame
+            # (cheap); the publisher's own thread encodes+publishes at an even rate, so the live
+            # video doesn't stutter between the pipeline's decode bursts (see live.py).
+            previewer = (
+                live.LivePreviewPublisher(live_conn, str(job.id), roi_norm).start()
+                if live_conn is not None
+                else None
+            )
+
             def preview_callback(av_frame, _decoded, _total):
-                # Smooth the live video with intermediate (non-sampled) frames — image only, boxes
-                # held on the client. Throttled BEFORE the ndarray conversion so it's near-free.
-                if live_conn is None or not live.should_publish_preview(str(job.id)):
-                    return
-                live.publish_preview(
-                    live_conn,
-                    str(job.id),
-                    av_frame.to_ndarray(format="bgr24"),
-                    job.progress,
-                    roi_norm,
-                )
+                if previewer is not None:
+                    previewer.update(av_frame, job.progress)
 
             def fused_frames():
                 generator = EvidenceExtractor().iter_extract(
@@ -286,12 +334,18 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
                     )
 
             def on_frame(frame, observations, _next_id):
-                if live_conn is not None:
-                    live.publish_frame(
-                        live_conn, str(job.id), frame.bgr, observations, job.progress, roi_norm
-                    )
+                # Only hand the detection BOXES to the preview publisher — it draws them over its own
+                # (single, monotonic) image stream. Publishing a detection-frame image here as well is
+                # what made the video jump forward/backward, so we no longer do that.
+                if previewer is not None:
+                    previewer.set_boxes(live.build_boxes(frame.bgr, observations))
 
-            events = pipeline.run(fused_frames(), on_frame=on_frame)
+            # Prefetch: decode/encode the next frame on a producer thread while this one is detected.
+            try:
+                events = pipeline.run(_prefetch(fused_frames()), on_frame=on_frame)
+            finally:
+                if previewer is not None:
+                    previewer.stop()
             manifest = manifest_holder.get("manifest")
             if manifest is None or not manifest.frames:
                 raise ValueError("No evidence frames were extracted for inference")
@@ -446,6 +500,26 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
             job.current_stage = "RESULTS_READY"
             job.progress = 100.0
             job.completed_at = datetime.now(UTC)
+            # Missed-vehicle recall runs on its OWN background task (decoupled from the cross-check),
+            # so the "nghi bỏ sót" bar fills in shortly after review opens without adding to the wait.
+            if settings.cloud_ocr_available:
+                try:
+                    from redis import Redis
+                    from rq import Queue
+
+                    from app.workers.missed import set_missed_status
+
+                    set_missed_status(session, job, {"status": "pending", "candidates": []})
+                    Queue(
+                        settings.rq_queue, connection=Redis.from_url(settings.redis_url)
+                    ).enqueue(
+                        "app.workers.missed.missed_scan_job",
+                        str(job.id),
+                        job_timeout="1h",
+                        result_ttl=3600,
+                    )
+                except Exception:
+                    session.rollback()
             session.add(
                 JobEvent(
                     job_id=job.id,

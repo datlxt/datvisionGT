@@ -346,8 +346,7 @@ function LiveView({
             Show a clear banner so the frozen last frame doesn't look like the job hung. */}
         {progress >= 90 && (
           <div className="live-finishing">
-            <Icon name="clock" size={16} /> Đã detect xong — đang gộp lượt + đối chiếu AI… (gần
-            xong, đợi chút)
+            <Icon name="clock" size={16} /> Đã detect xong — đang gộp lượt và đối chiếu AI…
           </div>
         )}
       </div>

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
+from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
@@ -35,6 +37,87 @@ _inflight: dict[str, Future] = {}
 def _busy(job_id: str) -> bool:
     task = _inflight.get(job_id)
     return task is not None and not task.done()
+
+
+class LivePreviewPublisher:
+    """Publishes the smoothing preview at a STEADY cadence, decoupled from the decode/detect loop.
+
+    The offline loop produces frames in BURSTS: it decodes a batch of frames, then spends most of the
+    time DETECTING (during which nothing is decoded, so nothing new is shown). Publishing previews
+    straight from the decode callback therefore made the live video stutter — a rush of frames then a
+    freeze on each detection step — worst on car clips where detection is the long part.
+
+    Instead, the decode callback just APPENDS each decoded frame to a small bounded ring (cheap, no
+    encode); this publisher's own thread pops one frame every ``interval`` and encodes+publishes it.
+    So a decode burst fills the ring and the following detection gap DRAINS it at a constant rate —
+    the motion plays back evenly instead of rushing then freezing. The ring is capped so latency
+    stays bounded (oldest un-played frames are dropped, which just speeds the playback slightly). It
+    shows REAL decoded frames in order (so detection boxes still line up) and is fully best-effort —
+    every failure is swallowed and it never touches the pipeline.
+    """
+
+    def __init__(
+        self,
+        rconn: Any,
+        job_id: str,
+        roi: Any,
+        interval: float = _MIN_INTERVAL_S,
+        buffer: int = 15,
+    ) -> None:
+        self._rconn = rconn
+        self._job_id = job_id
+        self._roi = roi
+        self._interval = interval
+        self._cap = buffer  # ~1.5 s of playback at 10 fps — bounds how far live lags the pipeline
+        self._frames: deque[tuple[Any, float]] = deque()
+        self._boxes: list[dict[str, Any]] = []
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name="live-preview", daemon=True)
+
+    def start(self) -> "LivePreviewPublisher":
+        self._thread.start()
+        return self
+
+    def update(self, av_frame: Any, progress: float) -> None:
+        """Queue a decoded frame (av.VideoFrame) — called per non-sampled frame. Cheap: just stores a
+        reference; the conversion + encode happen on this publisher's thread. Oldest un-played frames
+        are dropped when the ring is full so the preview never lags more than ``_cap`` frames."""
+
+        with self._lock:
+            self._frames.append((av_frame, progress))
+            while len(self._frames) > self._cap:
+                self._frames.popleft()
+
+    def set_boxes(self, boxes: list[dict[str, Any]]) -> None:
+        """Record the latest detection boxes (already scaled to the preview width). They ride along
+        in EVERY published frame — so the image comes from ONE monotonic source (this publisher) and
+        the boxes just overlay it. That's what fixes the forward/backward jump: previously the box
+        frames wrote their OWN (detection-frontier) image while the smooth preview wrote a slightly
+        different-time image, and the two fought."""
+
+        with self._lock:
+            self._boxes = boxes
+
+    def stop(self) -> None:
+        self._stop.set()
+        try:
+            self._thread.join(timeout=1.5)
+        except Exception:
+            pass
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self._interval):
+            with self._lock:
+                item = self._frames.popleft() if self._frames else None
+                boxes = self._boxes
+            if item is None:
+                continue  # ring empty (pipeline mid-detection with no buffered frames) — hold
+            try:
+                bgr = item[0].to_ndarray(format="bgr24")
+            except Exception:
+                continue
+            _encode_preview(self._rconn, self._job_id, bgr, item[1], self._roi, boxes)
 
 
 def live_key(job_id: str) -> str:
@@ -165,11 +248,56 @@ def publish_preview(
         pass
 
 
+def build_boxes(bgr: Any, observations: list[Any]) -> list[dict[str, Any]]:
+    """Scale the detection boxes for a frame to the preview width, for the client overlay. Returned
+    to the LivePreviewPublisher via set_boxes so the boxes ride inside the (single, monotonic) image
+    stream instead of being published as their own competing frame."""
+
+    boxes: list[dict[str, Any]] = []
+    try:
+        height, width = bgr.shape[:2]
+        if width <= 0 or height <= 0:
+            return boxes
+        scale = _PREVIEW_WIDTH / width
+        for obs in observations:
+            vb = obs.vehicle_bbox
+            boxes.append(
+                {
+                    "k": "v",
+                    "x1": round(vb[0] * scale),
+                    "y1": round(vb[1] * scale),
+                    "x2": round(vb[2] * scale),
+                    "y2": round(vb[3] * scale),
+                    "t": obs.vehicle_label,
+                }
+            )
+            pb = obs.plate_bbox
+            if pb is not None:
+                boxes.append(
+                    {
+                        "k": "p",
+                        "x1": round(pb[0] * scale),
+                        "y1": round(pb[1] * scale),
+                        "x2": round(pb[2] * scale),
+                        "y2": round(pb[3] * scale),
+                        "t": obs.reading.raw_text if obs.reading is not None else "",
+                    }
+                )
+    except Exception:
+        return boxes
+    return boxes
+
+
 def _encode_preview(
-    rconn: Any, job_id: str, bgr: Any, progress: float, roi: Any = None
+    rconn: Any,
+    job_id: str,
+    bgr: Any,
+    progress: float,
+    roi: Any = None,
+    boxes: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Image-only INTERMEDIATE frame (no boxes) — smooths the live video between detected frames.
-    The frontend keeps the last boxes when a payload has no 'boxes' field. Never raises."""
+    """Encode + publish one preview frame — the SINGLE writer of the live image. The current
+    detection boxes (if any) ride along so they overlay this frame on the client. Never raises."""
 
     try:
         height, width = bgr.shape[:2]
@@ -186,6 +314,7 @@ def _encode_preview(
             "w": pw,
             "h": ph,
             "img": base64.b64encode(buf).decode("ascii"),
+            "boxes": boxes or [],
         }
         if roi is not None and len(roi) == 4:
             payload["roi"] = [

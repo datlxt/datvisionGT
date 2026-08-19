@@ -160,6 +160,7 @@ def _merge_persisted_motion_candidates(
     max_gap_ms: int = 1_250,
     no_plate_gap_ms: int = 14_000,
     min_no_plate_detections: int = 5,
+    cross_plate_merge_gap_ms: int = 90_000,
 ) -> list[EventResult]:
     """Keep API/CSV at one review case when MOG2 produced adjacent fragments."""
 
@@ -389,11 +390,21 @@ def _merge_persisted_motion_candidates(
 
     unique_events: list[EventResult] = []
     plate_index: dict[str, int] = {}
-    for event in variant_merged:
+    for event in sorted(variant_merged, key=lambda item: item.start_timestamp_ms):
         if not event.normalized_plate:
             unique_events.append(event)
             continue
         match_index = plate_index.get(event.normalized_plate)
+        # Only merge same-plate events that are close in time (one continuous pass). Two appearances
+        # far apart are SEPARATE passes — e.g. a car early AND again at the end (29601NN69 at 2:24 and
+        # 34:49). Without this gap check they were merged into one event spanning the whole clip, so
+        # the later pass vanished from the list. (Their REPEATED_PLATE flag already comes from the
+        # pipeline consolidation; we add nothing here to keep the returned result unchanged otherwise.)
+        if match_index is not None and (
+            event.start_timestamp_ms - unique_events[match_index].end_timestamp_ms
+            > cross_plate_merge_gap_ms
+        ):
+            match_index = None
         if match_index is None:
             plate_index[event.normalized_plate] = len(unique_events)
             unique_events.append(event)
@@ -772,16 +783,6 @@ def cross_check_ocr(
             "auto_verified": auto_verified,
         },
     )
-    # Refresh the missed-vehicle recall (soát bỏ sót) too, so the "nghi bỏ sót" timeline stays in
-    # sync after a manual re-check. Best-effort — never blocks the cross-check result.
-    from app.workers.missed import scan_missed_vehicles, set_missed_status
-
-    try:
-        set_missed_status(session, job, {"status": "running", "candidates": []})
-        set_missed_status(session, job, scan_missed_vehicles(session, job, settings))
-    except Exception:
-        session.rollback()
-        set_missed_status(session, job, {"status": "error", "candidates": []})
     return CrossCheckSummary(
         checked=agree + disagree + unverified,
         agree=agree,
@@ -789,6 +790,35 @@ def cross_check_ocr(
         unverified=unverified,
         auto_verified=auto_verified,
     )
+
+
+@router.post("/{job_id}/missed-scan")
+def trigger_missed_scan(
+    job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)]
+) -> dict[str, str]:
+    """Kick off the missed-vehicle recall (soát bỏ sót) as a BACKGROUND task for this job — used to
+    populate the "nghi bỏ sót" bar on a job that predates the feature, without running the cross-check.
+    Idempotent-ish: re-queuing just re-scans."""
+
+    settings = get_settings()
+    if not settings.cloud_ocr_available:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Cloud OCR chưa bật hoặc thiếu OPENAI_API_KEY."
+        )
+    job = session.get(ProcessingJob, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+
+    from redis import Redis
+    from rq import Queue
+
+    from app.workers.missed import set_missed_status
+
+    set_missed_status(session, job, {"status": "pending", "candidates": []})
+    Queue(settings.rq_queue, connection=Redis.from_url(settings.redis_url)).enqueue(
+        "app.workers.missed.missed_scan_job", str(job.id), job_timeout="1h", result_ttl=3600
+    )
+    return {"status": "queued"}
 
 
 def _path_safe(name: str) -> str:

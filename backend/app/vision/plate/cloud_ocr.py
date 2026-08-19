@@ -341,3 +341,93 @@ def check_vehicle_openai(image_bytes: bytes, settings: Settings) -> bool | None:
         model=settings.openai_ocr_model,
         timeout=settings.cloud_ocr_timeout_s,
     )
+
+
+_GAP_INSPECT_PROMPT = (
+    "Đây là ảnh cắt từ camera một LÀN xe (trạm/bãi), nhìn từ phía sau xe.\n"
+    "1) Trong ảnh có MỘT CHIẾC XE (xe máy hoặc ô tô) đang ở trong làn không? Bỏ qua người đi bộ,"
+    " bóng đổ, vệt sáng, cột/biển hiệu, làn trống.\n"
+    "2) Nếu CÓ xe: nhìn thấy BIỂN SỐ không? Nếu thấy, đọc biển (chỉ A-Z và 0-9, bỏ gạch/chấm, gộp 2"
+    " dòng thành 1 chuỗi; Đ đọc thành D). Không thấy/không đọc được thì để biển rỗng.\n"
+    "3) Loại xe: 'motorcycle' hoặc 'car' (rỗng nếu không rõ).\n"
+    "Trả về JSON thuần: {\"vehicle\": true/false, \"plate\": \"...\", \"vehicle_type\": \"...\"}. "
+    "vehicle=true CHỈ khi chắc chắn có xe trong làn."
+)
+
+
+def read_gap_vehicle(
+    image_bytes: bytes, *, base_url: str, api_key: str, model: str, timeout: float
+) -> dict | None:
+    """For missed-vehicle recall: does this (ROI-cropped) gap frame contain a vehicle, and if so is
+    a plate visible (read it)?
+
+    Returns ``{"vehicle": bool, "plate": str, "vehicle_type": str}`` or ``None`` on any failure so
+    the caller treats the gap as "not scanned".
+    """
+
+    if not api_key:
+        return None
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _GAP_INSPECT_PROMPT},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
+                    },
+                ],
+            }
+        ],
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(
+        url=f"{base_url.rstrip('/')}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    parsed = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            content = body["choices"][0]["message"]["content"]
+            if not content:
+                return None
+            parsed = json.loads(content)
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code in (429, 500, 502, 503, 504) and attempt < _MAX_RETRIES - 1:
+                time.sleep(0.8 * (attempt + 1))
+                continue
+            return None
+        except (urllib.error.URLError, OSError, TimeoutError):
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(0.6 * (attempt + 1))
+                continue
+            return None
+        except (KeyError, IndexError, ValueError, TypeError):
+            return None
+    if parsed is None:
+        return None
+    plate = "".join(ch for ch in str(parsed.get("plate", "")).upper() if ch.isalnum())
+    vtype = str(parsed.get("vehicle_type", "")).strip().lower()
+    if vtype not in ("motorcycle", "car"):
+        vtype = ""
+    return {"vehicle": bool(parsed.get("vehicle")), "plate": plate, "vehicle_type": vtype}
+
+
+def read_gap_vehicle_openai(image_bytes: bytes, settings: Settings) -> dict | None:
+    """Missed-vehicle recall (with plate read) via the primary (AI-1) reader."""
+
+    return read_gap_vehicle(
+        image_bytes,
+        base_url=settings.openai_base_url,
+        api_key=settings.openai_api_key if settings.openai_available else "",
+        model=settings.openai_ocr_model,
+        timeout=settings.cloud_ocr_timeout_s,
+    )

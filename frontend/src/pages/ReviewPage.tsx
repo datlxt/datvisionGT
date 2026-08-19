@@ -334,6 +334,19 @@ export function ReviewPage({ job }: { job: Job }) {
     return () => clearTimeout(timer);
   }, [results]);
 
+  // Kick the missed-vehicle recall on its own the first time we open a job that never ran it (older
+  // jobs, or before the feature). It runs in the BACKGROUND — no need to touch the AI cross-check.
+  const missedKicked = useRef(false);
+  useEffect(() => {
+    if (!results || missedKicked.current) return;
+    if (results.missed_scan == null) {
+      missedKicked.current = true;
+      api(`/api/v1/jobs/${job.id}/missed-scan`, { method: "POST" })
+        .then(() => setReloadToken((value) => value + 1))
+        .catch(() => undefined);
+    }
+  }, [results, job.id]);
+
   // Two-way sync: while the video plays/seeks, auto-select the track that matches the current
   // position (tightest covering window, else nearest) so the left-column crop follows the screen.
   useEffect(() => {
@@ -425,7 +438,18 @@ export function ReviewPage({ job }: { job: Job }) {
   // the scan hasn't run / errored, we fall back to every raw time-gap (nothing is hidden).
   const missedScan = results?.missed_scan ?? null;
   const suspectedGaps = useMemo(() => {
-    type Gap = { start: number; end: number; ts: number; frameUrl?: string; confirmed: boolean };
+    type Gap = {
+      start: number;
+      end: number;
+      ts: number;
+      frameUrl?: string;
+      confirmed: boolean;
+      plate?: string;
+      hasPlate?: boolean;
+      vehicleType?: string;
+      inList?: boolean;
+      plateElsewhereMs?: number | null;
+    };
     if (missedScan?.status === "done") {
       return missedScan.candidates.map<Gap>((c) => ({
         start: c.start_ms,
@@ -433,7 +457,18 @@ export function ReviewPage({ job }: { job: Job }) {
         ts: c.ts_ms,
         frameUrl: c.frame_url,
         confirmed: true,
+        plate: c.plate,
+        hasPlate: c.has_plate,
+        vehicleType: c.vehicle_type,
+        inList: c.in_list,
+        plateElsewhereMs: c.plate_elsewhere_ms,
       }));
+    }
+    // While the AI recall is still queued/running, DON'T flash the full list of raw time-gaps — most
+    // are empty road or a car idling past its track, and showing dozens is noise. Wait for the AI to
+    // filter them. Only fall back to raw gaps when the feature is genuinely unavailable (null/error).
+    if (missedScan?.status === "pending" || missedScan?.status === "running") {
+      return [];
     }
     const ordered = [...(results?.events ?? [])].sort(
       (a, b) => a.start_timestamp_ms - b.start_timestamp_ms,
@@ -450,6 +485,10 @@ export function ReviewPage({ job }: { job: Job }) {
       gaps.push({ start: cursor, end: totalMs, ts: cursor, confirmed: false });
     return gaps;
   }, [missedScan, results, totalMs]);
+
+  // Which AI-confirmed gap the reviewer clicked open (shows the AI's finding for that moment).
+  const [openGapKey, setOpenGapKey] = useState<number | null>(null);
+  const openGap = suspectedGaps.find((gap) => gap.start === openGapKey) ?? null;
 
   function seekVideo(ms: number) {
     if (videoRef.current) {
@@ -856,12 +895,19 @@ export function ReviewPage({ job }: { job: Job }) {
                     </span>
                     {suspectedGaps.map((gap) => (
                       <button
-                        className={`ct-gap-chip${gap.confirmed ? " ct-gap-chip-ai" : ""}`}
+                        className={`ct-gap-chip${gap.confirmed ? " ct-gap-chip-ai" : ""}${
+                          openGapKey === gap.start ? " ct-gap-chip-open" : ""
+                        }`}
                         key={gap.start}
-                        onClick={() => seekVideo(gap.ts)}
+                        onClick={() => {
+                          seekVideo(gap.ts);
+                          setOpenGapKey(
+                            gap.confirmed && openGapKey !== gap.start ? gap.start : null,
+                          );
+                        }}
                         title={
                           gap.confirmed
-                            ? "AI thấy có xe trong khoảng này — tua tới khung AI thấy"
+                            ? "AI thấy có xe — bấm để xem kết quả AI"
                             : "Khoảng trống — tua tới đầu khoảng để tự soát"
                         }
                         type="button"
@@ -872,6 +918,49 @@ export function ReviewPage({ job }: { job: Job }) {
                         {gap.confirmed ? formatTime(gap.ts) : `${formatTime(gap.start)}–${formatTime(gap.end)}`}
                       </button>
                     ))}
+                  </div>
+                )}
+                {openGap && openGap.confirmed && (
+                  <div className="gap-detail">
+                    {openGap.frameUrl && (
+                      <img alt="Khung AI thấy" className="gap-detail-frame" src={openGap.frameUrl} />
+                    )}
+                    <div className="gap-detail-body">
+                      <div className="gap-detail-head">
+                        <strong>Kết quả AI tại {formatTime(openGap.ts)}</strong>
+                        <button
+                          className="gap-detail-close"
+                          onClick={() => setOpenGapKey(null)}
+                          type="button"
+                        >
+                          <Icon name="x" size={14} />
+                        </button>
+                      </div>
+                      <ul className="gap-detail-list">
+                        <li>
+                          <span>Có xe</span>
+                          <b>Có{openGap.vehicleType ? ` (${openGap.vehicleType === "car" ? "ô tô" : "xe máy"})` : ""}</b>
+                        </li>
+                        <li>
+                          <span>Biển số</span>
+                          <b>{openGap.hasPlate && openGap.plate ? openGap.plate : "Không thấy biển"}</b>
+                        </li>
+                        <li>
+                          <span>Trong list</span>
+                          <b className={openGap.inList ? "" : "gap-detail-warn"}>
+                            {openGap.inList
+                              ? "Đã có case ở thời điểm này"
+                              : "Chưa có (thời điểm này) → nên bổ sung"}
+                          </b>
+                        </li>
+                        {openGap.plateElsewhereMs != null && (
+                          <li>
+                            <span>Biển này</span>
+                            <b>Từng xuất hiện lúc {formatTime(openGap.plateElsewhereMs)} (lượt khác)</b>
+                          </li>
+                        )}
+                      </ul>
+                    </div>
                   </div>
                 )}
                 {missedScan?.status === "done" && suspectedGaps.length === 0 && (

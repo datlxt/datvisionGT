@@ -1685,6 +1685,80 @@ code {
   color: #15803d;
 }
 
+.ct-gap-chip-open {
+  outline: 2px solid #f59e0b;
+  outline-offset: 1px;
+}
+
+/* AI finding for a clicked missed-vehicle gap */
+.gap-detail {
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+  border-radius: 10px;
+}
+
+.gap-detail-frame {
+  width: 150px;
+  height: 100px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #fcd34d;
+  flex-shrink: 0;
+}
+
+.gap-detail-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.gap-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  color: #b45309;
+}
+
+.gap-detail-close {
+  border: 0;
+  background: transparent;
+  color: #b45309;
+  cursor: pointer;
+  display: inline-flex;
+}
+
+.gap-detail-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.gap-detail-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.gap-detail-list span {
+  color: var(--muted);
+}
+
+.gap-detail-list b {
+  color: var(--navy);
+  text-align: right;
+}
+
+.gap-detail-warn {
+  color: #b45309 !important;
+}
+
 .row-actions {
   display: flex;
   align-items: center;
@@ -2100,6 +2174,8 @@ code {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .live-stage {
@@ -2108,6 +2184,8 @@ code {
   overflow: hidden;
   background: #0a1520;
   aspect-ratio: 16 / 9;
+  /* Cap the height so the whole processing screen stays within the viewport (no stray scrollbar). */
+  max-height: calc(100vh - 300px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2689,6 +2767,22 @@ code {
   color: var(--navy);
   background: transparent;
   font-size: 10px;
+}
+
+/* Exports page: align the search toolbar with the notice + table above/below it (all capped at
+   1360 and centered), and give the search field a larger, more premium footprint. */
+.exports-page .review-toolbar {
+  max-width: 1360px;
+  margin: 0 auto 18px;
+}
+
+.exports-page .review-toolbar > label {
+  width: 340px;
+  height: 42px;
+}
+
+.exports-page .review-toolbar input {
+  font-size: 14px;
 }
 
 .filter-tabs {
@@ -3736,9 +3830,12 @@ button.selection-card:hover:not(.selected) {
   border-color: var(--border-strong);
 }
 
-/* Condense (cắt video) */
-.condense-page .form-card {
-  margin-bottom: 18px;
+/* Condense (cắt video) — cap + center every card/toast to 1360 so the page lines up with the
+   create-job and exports pages (whose header + content are all 1360, centered). */
+.condense-page > .card,
+.condense-page > .toast-inline {
+  max-width: 1360px;
+  margin: 0 auto 18px;
 }
 
 .condense-gap {

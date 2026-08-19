@@ -244,11 +244,6 @@ def cross_check_job(job_id: str) -> dict[str, int | str]:
         job = session.get(ProcessingJob, uuid.UUID(str(job_id)))
         if job is None:
             return {"skipped": "job_not_found"}
-        # Mark the recall pending up front so the review UI knows to keep polling for it (and legacy
-        # jobs, which never get this key, don't poll forever).
-        from app.workers.missed import set_missed_status
-
-        set_missed_status(session, job, {"status": "pending", "candidates": []})
         agree, disagree, unverified = run_cross_check(session, job, settings)
         # Fast-track the unanimous (all 3 readers agree) cases automatically — the reviewer only
         # deals with disagreements. Lazy import avoids a module-load cycle with the API layer.
@@ -267,17 +262,6 @@ def cross_check_job(job_id: str) -> dict[str, int | str]:
                 "auto_verified": auto_verified,
             },
         )
-        # Missed-vehicle recall (soát bỏ sót): AI re-scans the empty detection gaps to tell the QC
-        # which are real misses. Best-effort — a failure leaves the gaps as plain time-gaps and can
-        # never affect the cross-check result above.
-        from app.workers.missed import scan_missed_vehicles, set_missed_status
-
-        try:
-            set_missed_status(session, job, {"status": "running", "candidates": []})
-            set_missed_status(session, job, scan_missed_vehicles(session, job, settings))
-        except Exception:
-            session.rollback()
-            set_missed_status(session, job, {"status": "error", "candidates": []})
     return {
         "agree": agree,
         "disagree": disagree,

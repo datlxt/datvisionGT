@@ -204,12 +204,19 @@ export function Icon({
     ),
     motorcycle: (
       <>
-        <circle cx="5.5" cy="16.5" r="3" />
-        <circle cx="18.5" cy="16.5" r="3" />
-        <path d="M5.5 16.5 8 10h5l2.5 4" />
-        <path d="M6.5 10H13" />
-        <path d="M13 10l1.5-3H17" />
-        <path d="M15.5 14 18.5 16.5" />
+        {/* rear + front wheels */}
+        <circle cx="5.5" cy="16" r="3.2" />
+        <circle cx="18.5" cy="16" r="3.2" />
+        {/* seat + fuel tank profile: rear hub up over the top to the headstock */}
+        <path d="M5.5 16 7.3 11H12.5l1.5-3" />
+        {/* engine / lower frame down to the front */}
+        <path d="M8 11 10.3 14h4.7" />
+        {/* lower fork to front hub */}
+        <path d="M15 14 18.5 16" />
+        {/* handlebar grip */}
+        <path d="M13.2 7.6 15.2 7H17.3" />
+        {/* front fork from headstock to front wheel */}
+        <path d="M15 7.4 18.5 16" />
       </>
     ),
     car: (
