@@ -10,11 +10,14 @@ import { ExportsPage } from "./pages/ExportsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { ProcessingPage } from "./pages/ProcessingPage";
 import { ReviewPage } from "./pages/ReviewPage";
-import type { Health, Job, View } from "./types";
+import type { CondenseStatus, Health, Job, View } from "./types";
 
 export default function App() {
   const [view, setView] = useState<View>("create");
   const [createVehicleType, setCreateVehicleType] = useState<"motorcycle" | "car">("motorcycle");
+  // A condensed video the user chose to turn into GT — pre-selected in the Create Job import flow
+  // (so they draw the ROI / set the lane there) instead of jumping straight to processing.
+  const [condensedForCreate, setCondensedForCreate] = useState<CondenseStatus | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
@@ -59,6 +62,20 @@ export default function App() {
     setSelectedJob((current) => (current?.id === job.id ? null : current));
   }, []);
 
+  const flagJob = useCallback(async (job: Job, flagged: boolean) => {
+    // Toggle the "important" bookmark. Update in place (don't reorder the list) so the row the
+    // user just starred doesn't jump under their cursor.
+    const updated = await api<Job>(`/api/v1/jobs/${job.id}/flag`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flagged }),
+    });
+    setJobs((current) =>
+      current.map((candidate) => (candidate.id === updated.id ? updated : candidate)),
+    );
+    setSelectedJob((current) => (current?.id === updated.id ? updated : current));
+  }, []);
+
   function openJob(job: Job) {
     setSelectedJob(job);
     setView(isReadyForReview(job) ? "review" : "processing");
@@ -68,6 +85,8 @@ export default function App() {
     if (next === "review" && !selectedJob) return;
     // Silently refresh job statuses (review may have flipped a job to COMPLETED).
     if (next === "overview" || next === "exports") setReloadToken((value) => value + 1);
+    // A sidebar visit to "Tạo job" is a fresh start, not the cut-video hand-off.
+    if (next === "create") setCondensedForCreate(null);
     setView(next);
   }
 
@@ -102,6 +121,7 @@ export default function App() {
               setView("condense");
               return;
             }
+            setCondensedForCreate(null);
             setCreateVehicleType(scope);
             setView("create");
           }}
@@ -113,7 +133,9 @@ export default function App() {
   } else if (view === "create") {
     content = (
       <CreateJobPage
+        initialCondensed={condensedForCreate}
         initialVehicleType={createVehicleType}
+        key={condensedForCreate?.id ?? "new-upload"}
         onDraftSaved={upsertJob}
         onStarted={(job) => {
           upsertJob(job);
@@ -132,18 +154,17 @@ export default function App() {
   } else if (view === "review" && selectedJob) {
     content = <ReviewPage job={selectedJob} key={selectedJob.id} />;
   } else if (view === "exports") {
-    content = <ExportsPage jobs={jobs} onDelete={deleteJob} onOpen={openJob} />;
+    content = (
+      <ExportsPage jobs={jobs} onDelete={deleteJob} onFlag={flagJob} onOpen={openJob} />
+    );
   } else if (view === "condense") {
     content = (
       <CondensePage
-        onSentToJob={async (jobId) => {
-          try {
-            const job = await api<Job>(`/api/v1/jobs/${jobId}`);
-            upsertJob(job);
-            setView("processing");
-          } catch {
-            navigate("overview");
-          }
+        onOpenInCreate={(item) => {
+          // Hand the cut video to the Create Job flow (pre-selected) so the reviewer draws the ROI
+          // and sets the lane there, instead of it going straight to processing unconfigured.
+          setCondensedForCreate(item);
+          setView("create");
         }}
       />
     );

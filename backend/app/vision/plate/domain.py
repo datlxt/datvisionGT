@@ -58,9 +58,13 @@ class VehicleEventResult:
 
 
 def normalize_vietnamese_plate(text: str) -> str:
-    """Normalize layout punctuation while preserving only OCR-relevant symbols."""
+    """Normalize layout punctuation while preserving only OCR-relevant symbols.
 
-    return re.sub(r"[^A-Z0-9]", "", text.upper())
+    'Đ' (the electric 'MĐ' series letter) is folded to 'D' FIRST — otherwise the ``[^A-Z0-9]``
+    strip would DROP it (Đ is U+0110, not A-Z), turning a human-typed 'MĐ' into a wrong plate that
+    no longer matches the OCR's ASCII 'MD'. Folding keeps both spellings equal ('MĐ' == 'MD')."""
+
+    return re.sub(r"[^A-Z0-9]", "", text.upper().replace("Đ", "D"))
 
 
 # Civilian motorcycle/passenger plate: province(2 digits) + series letter + an OPTIONAL second

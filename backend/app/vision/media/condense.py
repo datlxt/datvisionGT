@@ -33,6 +33,7 @@ def plan_segments(
     *,
     duration_ms: int,
     pad_ms: int = 750,
+    trail_pad_ms: int | None = None,
     merge_gap_ms: int = 2_000,
     min_active_ms: int = 500,
 ) -> list[Segment]:
@@ -42,10 +43,17 @@ def plan_segments(
     its pass), isolated blips shorter than ``min_active_ms`` are dropped as noise, and each
     kept run is padded so the vehicle enters and leaves fully. Cutting is destructive, so
     the planner errs toward keeping: padding and gap-merging only ever grow segments.
+
+    The trailing pad (``trail_pad_ms``) defaults larger than the lead pad: a vehicle EXITING
+    often stops being detected while it's still half in frame (its visible area shrinks past
+    the motion threshold, or it partially leaves the detector's zone), so more slack is needed
+    after the last hit to keep the full exit than before the first — otherwise the tail of the
+    pass gets cut and the vehicle appears to vanish mid-frame.
     """
 
     if not active_ms or duration_ms <= 0:
         return []
+    trail_pad_ms = pad_ms if trail_pad_ms is None else trail_pad_ms
     ordered = sorted(active_ms)
     # 1. Group activity into raw runs; a gap over merge_gap_ms starts a new run.
     runs: list[list[int]] = [[ordered[0], ordered[0]]]
@@ -60,7 +68,7 @@ def plan_segments(
         return []
     # 3. Pad each run so the vehicle fully enters/leaves, clamped to the video bounds.
     padded = [
-        [max(0, run[0] - pad_ms), min(duration_ms, run[1] + pad_ms)] for run in runs
+        [max(0, run[0] - pad_ms), min(duration_ms, run[1] + trail_pad_ms)] for run in runs
     ]
     # 4. Merge windows that overlap once padded.
     merged: list[Segment] = [Segment(padded[0][0], padded[0][1])]
@@ -76,11 +84,21 @@ def total_kept_ms(segments: list[Segment]) -> int:
     return sum(segment.duration_ms for segment in segments)
 
 
+def _bbox_in_roi(bbox: tuple[float, float, float, float], roi_px: tuple[float, ...]) -> bool:
+    """True when a detection box overlaps the ROI rectangle (both in pixels). Any overlap counts —
+    a vehicle is "in the chosen lane" the moment part of it enters the box."""
+
+    return not (
+        bbox[2] < roi_px[0] or bbox[0] > roi_px[2] or bbox[3] < roi_px[1] or bbox[1] > roi_px[3]
+    )
+
+
 def scan_active_timestamps(
     source_path: Path,
     detector: ActivityDetector,
     *,
     sample_every_ms: int = 250,
+    roi: tuple[float, float, float, float] | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> list[int]:
     """Sample the video and return timestamps (ms) where a vehicle or motion is present.
@@ -88,6 +106,11 @@ def scan_active_timestamps(
     The detector is fed frames in order (its motion background model needs a steady feed).
     Any hit — semantic vehicle OR motion — marks the sample active, so a hard-to-detect
     or briefly stationary vehicle is kept rather than cut.
+
+    When ``roi`` (a normalized x1,y1,x2,y2 lane box, 0-1) is given, only detections that overlap
+    that box count — so activity in an ADJACENT lane no longer keeps a segment. The detector still
+    runs on the full frame (its motion model needs the whole image); we just ignore hits outside
+    the lane.
     """
 
     from app.vision.media.reader import PyAVVideoReader
@@ -100,7 +123,13 @@ def scan_active_timestamps(
         if timestamp_ms - last_sample_ms < sample_every_ms:
             continue
         last_sample_ms = timestamp_ms
-        if detector.detect(frame.image.to_ndarray(format="bgr24")):
+        image = frame.image.to_ndarray(format="bgr24")
+        detections = detector.detect(image)
+        if roi is not None and detections:
+            height, width = image.shape[:2]
+            roi_px = (roi[0] * width, roi[1] * height, roi[2] * width, roi[3] * height)
+            detections = [d for d in detections if _bbox_in_roi(tuple(d.bbox), roi_px)]
+        if detections:
             active.append(timestamp_ms)
         if on_progress is not None:
             on_progress(timestamp_ms)

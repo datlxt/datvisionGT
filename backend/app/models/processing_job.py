@@ -129,3 +129,10 @@ class ProcessingJob(UUIDPrimaryKeyMixin, Base):
         """Selectable vehicle class stored in the config snapshot (default motorcycle)."""
 
         return (self.config_snapshot or {}).get("vehicle_type", "motorcycle")
+
+    @property
+    def flagged(self) -> bool:
+        """Reviewer's "important — remember this" mark, kept in the config snapshot (no schema
+        change). Purely a UI bookmark; it never affects processing, GT or export contents."""
+
+        return bool((self.config_snapshot or {}).get("flagged", False))

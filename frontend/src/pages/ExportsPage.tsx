@@ -27,10 +27,12 @@ function isFailed(job: Job): boolean {
 export function ExportsPage({
   jobs,
   onDelete,
+  onFlag,
   onOpen,
 }: {
   jobs: Job[];
   onDelete: (job: Job) => Promise<void>;
+  onFlag: (job: Job, flagged: boolean) => Promise<void>;
   onOpen: (job: Job) => void;
 }) {
   const readyCount = jobs.filter(isReadyForReview).length;
@@ -141,7 +143,8 @@ export function ExportsPage({
                   <th>Cập nhật</th>
                   <th>Bản nháp — để soát</th>
                   <th>GT cuối — bàn giao</th>
-                  <th aria-label="Xóa" />
+                  <th className="th-center">Đánh dấu</th>
+                  <th className="th-center">Xóa</th>
                 </tr>
               </thead>
               <tbody>
@@ -202,6 +205,26 @@ export function ExportsPage({
                           Chưa sẵn sàng
                         </button>
                       )}
+                    </td>
+                    <td className="export-flag-cell">
+                      <button
+                        aria-label={
+                          job.flagged
+                            ? `Bỏ đánh dấu ${job.source_name}`
+                            : `Đánh dấu quan trọng ${job.source_name}`
+                        }
+                        aria-pressed={job.flagged}
+                        className={`flag-btn${job.flagged ? " is-flagged" : ""}`}
+                        onClick={() => onFlag(job, !job.flagged).catch(() => undefined)}
+                        title={
+                          job.flagged
+                            ? "Đã đánh dấu quan trọng — bấm để bỏ"
+                            : "Đánh dấu quan trọng để ghi nhớ"
+                        }
+                        type="button"
+                      >
+                        <Icon name="star" size={18} />
+                      </button>
                     </td>
                     <td className="export-delete-cell">
                       <div className="row-actions">

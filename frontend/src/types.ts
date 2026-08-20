@@ -5,6 +5,7 @@ export type CondenseStatus = {
   status: "queued" | "scanning" | "rendering" | "completed" | "empty" | "failed" | string;
   progress: number;
   source_name: string | null;
+  created_at: string | null;
   min_gap_seconds: number | null;
   source_duration_ms: number | null;
   condensed_duration_ms: number | null;
@@ -41,6 +42,7 @@ export type Job = {
   processing_mode: "HIGH_RECALL" | "BALANCED" | "FAST";
   sample_rate: number;
   vehicle_type: "motorcycle" | "car";
+  flagged: boolean;
   error_code: string | null;
   error_message: string | null;
   created_at: string;

@@ -562,9 +562,11 @@ code {
 }
 
 .source-tabs {
-  display: inline-flex;
+  display: flex;
+  width: 340px;
+  max-width: 100%;
   gap: 3px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   padding: 4px;
   border-radius: 10px;
   background: #f0f5f8;
@@ -572,7 +574,9 @@ code {
 
 .source-tabs button {
   display: inline-flex;
+  flex: 1;
   align-items: center;
+  justify-content: center;
   gap: 7px;
   min-height: 34px;
   padding: 0 12px;
@@ -1781,6 +1785,53 @@ code {
   width: 56px;
 }
 
+/* Centred header + cell for the icon-only action columns (mark / delete). */
+.export-table .th-center {
+  text-align: center;
+}
+
+.export-flag-cell {
+  text-align: center;
+  width: 72px;
+}
+
+/* "Important — remember this" bookmark toggle. Outline star by default; fills amber when marked. */
+.flag-btn {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin: 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #b8c4d0;
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    background 0.12s ease,
+    transform 0.1s ease;
+}
+
+.flag-btn:hover {
+  background: #fff7e6;
+  color: #f0a500;
+}
+
+.flag-btn:active {
+  transform: scale(0.9);
+}
+
+.flag-btn.is-flagged {
+  color: #f5a623;
+}
+
+/* Fill the star when the row is marked (the SVG defaults to stroke-only). */
+.flag-btn.is-flagged svg {
+  fill: #f5a623;
+}
+
 .clickable-row {
   cursor: pointer;
   transition: background 0.12s ease;
@@ -2159,6 +2210,73 @@ code {
 }
 
 /* Processing */
+
+/* The "run" screen is a fixed single view: it fills the workspace exactly (viewport minus the 70px
+   topbar) and never scrolls the page. The header keeps its natural height; the framed card takes the
+   rest and its two columns stretch to fill it, so the live video sizes itself to the available space
+   instead of a fixed cap that pushed the layout a few pixels past the viewport (the stray scrollbar). */
+.processing-page {
+  height: calc(100vh - 70px);
+  min-height: 0;
+  padding-top: 24px;
+  padding-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.processing-page .processing-grid {
+  flex: 1 1 auto;
+  min-height: 0; /* let the columns shrink to fit instead of overflowing the page */
+}
+
+.processing-page .video-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.processing-page .live-view {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Height is driven by the column now, not a viewport formula — the frame letterboxes the stream. */
+.processing-page .live-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  aspect-ratio: auto;
+}
+
+.processing-page .video-card > video {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
+/* Safety valve for very short windows: scroll the steps panel internally, never the whole page. */
+.processing-page .pipeline-card {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* On small screens the layout restructures (topbar shrinks, columns stack), so the fixed one-screen
+   fit no longer applies — fall back to a normal scrolling page with a ratio-sized video. */
+@media (max-width: 900px) {
+  .processing-page {
+    height: auto;
+    overflow: visible;
+  }
+  .processing-page .live-stage {
+    flex: none;
+    aspect-ratio: 16 / 9;
+    max-height: calc(100vh - 260px);
+  }
+  .processing-page .pipeline-card {
+    overflow-y: visible;
+  }
+}
 
 /* Video + pipeline share ONE framed card, split by a vertical divider. */
 .processing-grid {
@@ -3852,30 +3970,76 @@ button.selection-card:hover:not(.selected) {
 
 /* Condense (cắt video) — cap + center every card/toast to 1360 so the page lines up with the
    create-job and exports pages (whose header + content are all 1360, centered). */
+.condense-page .page-header,
 .condense-page > .card,
 .condense-page > .toast-inline {
   max-width: 1360px;
-  margin: 0 auto 18px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.condense-page > .card,
+.condense-page > .toast-inline {
+  margin-bottom: 18px;
+}
+
+/* Setup panel: video on the left, cut level + action on the right, split by a divider. */
+.condense-setup {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  padding: 0;
+  overflow: hidden;
+}
+
+.condense-col {
+  display: flex;
+  flex-direction: column;
+  padding: 22px 24px;
+}
+
+.condense-col-divide {
+  border-left: 1px solid var(--border);
+}
+
+.condense-col .section-heading {
+  margin-bottom: 16px;
 }
 
 .condense-gap {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
 }
 
 .condense-gap label {
   color: var(--navy);
-  font-size: 14px;
+  font-size: 13px;
+}
+
+.condense-gap label strong {
+  color: var(--blue);
+  font-size: 15px;
 }
 
 .condense-gap input[type="range"] {
   width: 100%;
+  margin: 2px 0 0;
   accent-color: var(--blue);
 }
 
-.condense-gap small {
+.condense-gap-ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -2px;
   color: var(--muted);
+  font-size: 10px;
+}
+
+.condense-gap small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .condense-actions {
@@ -3885,9 +4049,181 @@ button.selection-card:hover:not(.selected) {
   margin-top: 16px;
 }
 
+/* Pin the primary action to the bottom of its column so both columns bottom-align cleanly. */
+.condense-actions-footer {
+  margin-top: auto;
+  padding-top: 16px;
+}
+
+/* Compact dropzone — the setup columns are already narrow, so it needn't be a tall hero box. */
+.condense-col .upload-dropzone {
+  min-height: 128px;
+  padding: 18px;
+}
+
+.condense-col .upload-symbol {
+  width: 40px;
+  height: 40px;
+  margin-bottom: 9px;
+}
+
+/* Selected file inside a narrow column: thumb + copy on one row, "Thay file" on its own line. */
+.condense-col .selected-file {
+  grid-template-columns: 116px minmax(0, 1fr);
+  margin-top: 0;
+}
+
+.condense-col .selected-file video {
+  width: 116px;
+  height: 68px;
+}
+
+.selected-file-swap {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+/* The "Thay file" button triggers this native picker via ref — keep the raw control hidden. */
+.selected-file input[type="file"] {
+  display: none;
+}
+
+/* Optional lane box on the Cắt video page (reuses the .roi-stage drawing surface). */
+.condense-roi {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.condense-roi-head strong {
+  color: var(--navy);
+  font-size: 13px;
+}
+
+.condense-roi-head p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.condense-roi-foot {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Processing progress — a balanced header (spinner + stage + percent) over a lively bar. */
+/* Processing card: give it real padding (a bare .card has none) so the header and bar aren't
+   glued to the edges, matching the other framed panels. */
+.condense-progress-card {
+  padding: 20px 24px 22px;
+}
+
+/* Cancel button under the progress bar while a cut runs. */
+.condense-progress-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.condense-progress-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.condense-spinner {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--blue-light);
+  color: var(--blue);
+}
+
+.condense-spinner svg {
+  animation: spin 900ms linear infinite;
+}
+
+.condense-progress-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.condense-progress-copy strong {
+  color: var(--navy);
+  font-size: 15px;
+}
+
+.condense-progress-copy small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.condense-progress-pct {
+  margin-left: auto;
+  color: var(--blue);
+  font-size: 22px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.condense-progress-track {
+  position: relative;
+  overflow: hidden;
+  height: 10px;
+  border-radius: 999px;
+  background: #e6eef3;
+}
+
+.condense-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--blue), #4c9bff);
+  transition: width 0.4s ease;
+}
+
+/* Moving highlight so the bar reads as "working" even while the percent sits at 0. */
+.condense-progress-track::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+  transform: translateX(-100%);
+  animation: condense-shimmer 1.3s ease-in-out infinite;
+}
+
+@keyframes condense-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Green "done" badge for the result heading (the numbered badge is blue). */
+.section-heading-done {
+  background: #e7f7ec !important;
+  color: #1f9d54 !important;
+}
+
 /* Spin only the refresh glyph (not its badge) while a condense job runs, to signal progress. */
 .section-heading-spin svg {
   animation: spin 900ms linear infinite;
+}
+
+/* Result card: pad it (a bare .card has none) so the stats + video preview aren't glued to the
+   edges, matching the other framed panels. */
+.condense-result {
+  padding: 22px 24px 24px;
 }
 
 .condense-stats {
@@ -3933,6 +4269,170 @@ button.selection-card:hover:not(.selected) {
   background: #05121f;
 }
 
+/* Neutral (grey) heading badge — for sections that aren't a numbered step. */
+.section-heading-plain {
+  background: #eef3f7 !important;
+  color: #5b7183 !important;
+}
+
+/* Source-origin toggle on the create-job page: upload a new video vs pick an already-cut one.
+   Sits on its OWN line below the media-type tabs (a separate choice), not crammed beside them. */
+.source-origin {
+  display: flex;
+  width: 340px;
+  max-width: 100%;
+  gap: 3px;
+  margin-bottom: 16px;
+  padding: 4px;
+  border-radius: 10px;
+  background: #f0f5f8;
+}
+
+.source-origin button {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #718390;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.source-origin button.active {
+  background: #fff;
+  color: var(--navy);
+  box-shadow: 0 2px 6px rgba(41, 68, 88, 0.09);
+}
+
+/* List of already-condensed videos (Cắt video page + create-job picker). */
+.condense-library {
+  max-width: 1360px;
+  padding: 22px 24px 24px;
+}
+
+.condensed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.condensed-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.condensed-row-main {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.condensed-row-main:hover:not(:disabled) {
+  border-color: var(--blue);
+  background: var(--blue-light);
+}
+
+.condensed-row-main:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.condensed-row-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--blue-light);
+  color: var(--blue);
+}
+
+.condensed-row-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.condensed-row-copy strong {
+  overflow: hidden;
+  color: var(--navy);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.condensed-row-copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.condensed-row-main > svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+/* Detail popup: video + cut stats, opened by clicking a row. */
+.condensed-detail {
+  width: min(680px, 92vw);
+  max-width: 680px;
+  text-align: left;
+  align-items: stretch;
+}
+
+.condensed-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.condensed-detail-head h3 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.condensed-detail-head small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.condensed-detail .condense-stats {
+  margin: 16px 0;
+}
+
 @media (max-width: 900px) {
   .vehicle-type-grid {
     grid-template-columns: 1fr;
@@ -3942,6 +4442,16 @@ button.selection-card:hover:not(.selected) {
 @media (max-width: 720px) {
   .condense-stats {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* Stack the setup columns; the divider moves from the side to the top. */
+  .condense-setup {
+    grid-template-columns: 1fr;
+  }
+
+  .condense-col-divide {
+    border-left: 0;
+    border-top: 1px solid var(--border);
   }
 }
 

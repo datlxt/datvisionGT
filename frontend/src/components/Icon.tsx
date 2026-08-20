@@ -26,6 +26,7 @@ type IconName =
   | "scissors"
   | "motorcycle"
   | "car"
+  | "star"
   | "x";
 
 export function Icon({
@@ -227,6 +228,9 @@ export function Icon({
         <circle cx="7" cy="17" r="1.8" />
         <circle cx="17" cy="17" r="1.8" />
       </>
+    ),
+    star: (
+      <path d="M12 3.5l2.6 5.27 5.82.85-4.21 4.1.99 5.79L12 16.77l-5.2 2.74.99-5.79-4.21-4.1 5.82-.85L12 3.5Z" />
     ),
   };
 

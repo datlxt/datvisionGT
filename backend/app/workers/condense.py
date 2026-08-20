@@ -49,10 +49,18 @@ def condense_video(
     *,
     min_gap_seconds: int = 15,
     pad_ms: int = 750,
+    # Larger trailing pad so a vehicle's full EXIT is kept — the detector often loses it while it's
+    # still leaving the frame, and 750ms wasn't enough to cover the rest (the tail got cut).
+    trail_pad_ms: int = 2500,
     min_active_ms: int = 500,
     sample_every_ms: int = 250,
+    roi: list[float] | None = None,
 ) -> dict[str, Any]:
-    """Scan an uploaded video for vehicle activity and re-encode only the busy segments."""
+    """Scan an uploaded video for vehicle activity and re-encode only the busy segments.
+
+    ``roi`` (normalized x1,y1,x2,y2) restricts activity to the chosen lane so an adjacent lane
+    no longer triggers a keep.
+    """
 
     settings = get_settings()
     base = settings.storage_root / "condense" / condense_id
@@ -81,13 +89,23 @@ def condense_video(
         if duration_ms:
             progress.set("scanning", 0.7 * timestamp_ms / duration_ms)
 
+    roi_box = (
+        (float(roi[0]), float(roi[1]), float(roi[2]), float(roi[3]))
+        if roi and len(roi) == 4
+        else None
+    )
     active = scan_active_timestamps(
-        source, detector, sample_every_ms=sample_every_ms, on_progress=on_scan
+        source,
+        detector,
+        sample_every_ms=sample_every_ms,
+        roi=roi_box,
+        on_progress=on_scan,
     )
     segments = plan_segments(
         active,
         duration_ms=duration_ms,
         pad_ms=pad_ms,
+        trail_pad_ms=trail_pad_ms,
         merge_gap_ms=min_gap_seconds * 1000,
         min_active_ms=min_active_ms,
     )

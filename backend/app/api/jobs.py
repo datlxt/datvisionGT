@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shutil
 import time
@@ -78,6 +79,7 @@ class JobResponse(BaseModel):
     processing_mode: str
     sample_rate: float
     vehicle_type: str
+    flagged: bool
     error_code: str | None
     error_message: str | None
     created_at: datetime
@@ -196,6 +198,93 @@ async def create_job(
             event_type="VIDEO_UPLOADED",
             message="Video uploaded and probed successfully",
             data={"sha256": metadata.sha256, "size_bytes": metadata.size_bytes},
+        )
+    )
+    session.commit()
+    session.refresh(job)
+    return job
+
+
+@router.post(
+    "/from-condense/{condense_id}",
+    response_model=JobResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_job_from_condense(
+    condense_id: str,
+    session: Annotated[Session, Depends(get_db)],
+    vehicle_type: str = "motorcycle",
+) -> ProcessingJob:
+    """Create a DRAFT job from an ALREADY-CONDENSED video (no re-upload). The reviewer then sets
+    the ROI / lane and starts it through the normal flow — closing the cut → GT loop end-to-end."""
+
+    settings = get_settings()
+    if vehicle_type not in VEHICLE_TYPES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Unsupported vehicle type")
+    condensed = settings.storage_root / "condense" / condense_id / "condensed.mp4"
+    if not condensed.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Condensed video not found")
+
+    upload_meta: dict = {}
+    upload_json = settings.storage_root / "condense" / condense_id / "upload.json"
+    if upload_json.is_file():
+        upload_meta = json.loads(upload_json.read_text())
+    source_stem = Path(upload_meta.get("source_name", "video.mp4")).stem
+    filename = _safe_filename(f"cut_{source_stem}.mp4")
+
+    upload_id = uuid.uuid4()
+    upload_dir = settings.storage_root / "uploads" / str(upload_id)
+    upload_dir.mkdir(parents=True, exist_ok=False)
+    final_path = upload_dir / filename
+    shutil.copyfile(condensed, final_path)
+    metadata = PyAVVideoReader().probe(final_path)
+
+    created = datetime.now(UTC)
+    job = ProcessingJob(
+        job_code=f"JOB_{created:%Y%m%d_%H%M%S}_{str(upload_id)[:8].upper()}",
+        source_name=filename,
+        source_path=final_path.relative_to(settings.storage_root).as_posix(),
+        source_hash=metadata.sha256,
+        source_size_bytes=metadata.size_bytes,
+        source_mime_type=metadata.mime_type,
+        object_mode="PLATE",
+        processing_mode="BALANCED",
+        sample_rate=2.0,
+        status="DRAFT",
+        current_stage="UPLOADED",
+        progress=0.0,
+        total_frames=metadata.frame_count,
+        duration_ms=metadata.duration_ms,
+        width=metadata.width,
+        height=metadata.height,
+        fps=metadata.fps,
+        codec=metadata.codec,
+        time_base=metadata.time_base,
+        pipeline_version="motorcycle-alpr-v4",
+        config_snapshot={
+            "camera": "rear_toll_lane",
+            "mode": "STANDARD",
+            "vehicle_type": vehicle_type,
+            "vehicle_detector": "yolox-tiny",
+            "plate_detector": "yolo-v9-t-512-license-plate-end2end",
+            "ocr": "cct-xs-v2-global-model",
+            "postprocess": (
+                "quality-gate+multi-frame-vote+best-frame-exposure"
+                "+near-plate-merge+global-plate-dedupe+motion-suppression"
+            ),
+            "sample_rate": 2.0,
+            "result_classes": ["RECOGNIZED", "LOW_CONFIDENCE", "UNREADABLE", "NO_PLATE"],
+            "condensed_from": condense_id,
+        },
+    )
+    session.add(job)
+    session.flush()
+    session.add(
+        JobEvent(
+            job_id=job.id,
+            event_type="VIDEO_UPLOADED",
+            message="Condensed video imported as a draft job",
+            data={"condensed_from": condense_id},
         )
     )
     session.commit()
@@ -369,6 +458,31 @@ def cancel_job(job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)]) 
     job.cancel_requested_at = datetime.now(UTC)
     if job.status in {"DRAFT", "QUEUED"}:
         job.status = "CANCELLED"
+    session.commit()
+    session.refresh(job)
+    return job
+
+
+class FlagRequest(BaseModel):
+    flagged: bool
+
+
+@router.post("/{job_id}/flag", response_model=JobResponse)
+def set_job_flag(
+    job_id: uuid.UUID,
+    payload: FlagRequest,
+    session: Annotated[Session, Depends(get_db)],
+) -> ProcessingJob:
+    """Toggle the reviewer's "important — remember this" bookmark. Stored in the config snapshot
+    (no schema change) and surfaced as ``flagged`` on the job; it never touches GT or export data."""
+
+    job = session.get(ProcessingJob, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+    config = dict(job.config_snapshot or {})
+    config["flagged"] = payload.flagged
+    job.config_snapshot = config
+    flag_modified(job, "config_snapshot")
     session.commit()
     session.refresh(job)
     return job

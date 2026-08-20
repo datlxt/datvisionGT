@@ -32,6 +32,7 @@ class CondenseStatus(BaseModel):
     status: str  # queued | scanning | rendering | completed | empty | failed
     progress: float = 0.0
     source_name: str | None = None
+    created_at: str | None = None  # when the cut was started (ISO 8601), for the "video đã cắt" list
     min_gap_seconds: int | None = None
     source_duration_ms: int | None = None
     condensed_duration_ms: int | None = None
@@ -57,12 +58,24 @@ async def create_condense(
     request: Request,
     filename_header: Annotated[str, Header(alias="X-Filename")],
     min_gap_seconds: int = 15,
+    roi: str | None = None,
 ) -> CondenseStatus:
     settings = get_settings()
     filename = _safe_filename(unquote(filename_header))
     if Path(filename).suffix.lower() not in VIDEO_EXTENSIONS:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Unsupported video format")
     min_gap_seconds = max(1, min(120, min_gap_seconds))
+
+    # Optional lane box "x1,y1,x2,y2" (normalized 0-1): activity outside it is ignored so an
+    # adjacent lane no longer triggers a keep. Ignored if malformed or degenerate.
+    roi_box: list[float] | None = None
+    if roi:
+        try:
+            parts = [max(0.0, min(1.0, float(value))) for value in roi.split(",")]
+        except ValueError:
+            parts = []
+        if len(parts) == 4 and parts[2] > parts[0] and parts[3] > parts[1]:
+            roi_box = parts
 
     condense_id = str(uuid.uuid4())
     base = _base_dir(settings, condense_id)
@@ -95,6 +108,7 @@ async def create_condense(
             {
                 "source_name": filename,
                 "min_gap_seconds": min_gap_seconds,
+                "roi": roi_box,
                 "created_at": datetime.now(UTC).isoformat(),
             }
         )
@@ -105,6 +119,7 @@ async def create_condense(
         condense_id,
         filename,
         min_gap_seconds=min_gap_seconds,
+        roi=roi_box,
         job_id=_rq_id(condense_id),
         job_timeout="1h",
         result_ttl=86400,
@@ -122,9 +137,11 @@ def list_condense() -> list[CondenseStatus]:
     if not root.is_dir():
         return []
     items: list[CondenseStatus] = []
-    for base in sorted(root.iterdir(), key=lambda path: path.name, reverse=True):
+    for base in root.iterdir():
         if not base.is_dir():
             continue
+        upload = _read_json(base / "upload.json")
+        created_at = upload.get("created_at")
         result = _read_json(base / "result.json")
         if result:
             items.append(
@@ -133,6 +150,7 @@ def list_condense() -> list[CondenseStatus]:
                     status=result["status"],
                     progress=1.0,
                     source_name=result.get("source_name"),
+                    created_at=created_at,
                     min_gap_seconds=result.get("min_gap_seconds"),
                     source_duration_ms=result.get("source_duration_ms"),
                     condensed_duration_ms=result.get("condensed_duration_ms"),
@@ -141,16 +159,18 @@ def list_condense() -> list[CondenseStatus]:
                 )
             )
             continue
-        upload = _read_json(base / "upload.json")
         if upload:
             items.append(
                 CondenseStatus(
                     id=base.name,
                     status="processing",
                     source_name=upload.get("source_name"),
+                    created_at=created_at,
                     min_gap_seconds=upload.get("min_gap_seconds"),
                 )
             )
+    # Newest cut first; entries without a timestamp (older tasks) sink to the bottom.
+    items.sort(key=lambda item: item.created_at or "", reverse=True)
     return items
 
 
@@ -161,6 +181,7 @@ def get_condense(condense_id: str) -> CondenseStatus:
     if not base.is_dir():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Condense task not found")
 
+    upload_meta = _read_json(base / "upload.json")
     result_path = base / "result.json"
     if result_path.is_file():
         data = json.loads(result_path.read_text())
@@ -169,6 +190,7 @@ def get_condense(condense_id: str) -> CondenseStatus:
             status=data["status"],
             progress=1.0,
             source_name=data.get("source_name"),
+            created_at=upload_meta.get("created_at"),
             min_gap_seconds=data.get("min_gap_seconds"),
             source_duration_ms=data.get("source_duration_ms"),
             condensed_duration_ms=data.get("condensed_duration_ms"),
@@ -177,7 +199,7 @@ def get_condense(condense_id: str) -> CondenseStatus:
             segments=data.get("segments"),
         )
 
-    upload = _read_json(base / "upload.json")
+    upload = upload_meta
     try:
         rq_job = RqJob.fetch(_rq_id(condense_id), connection=Redis.from_url(settings.redis_url))
         rq_status = rq_job.get_status(refresh=True)
@@ -198,8 +220,39 @@ def get_condense(condense_id: str) -> CondenseStatus:
         status=status_map.get(rq_status, "queued"),
         progress=progress,
         source_name=upload.get("source_name"),
+        created_at=upload.get("created_at"),
         min_gap_seconds=upload.get("min_gap_seconds"),
     )
+
+
+@router.delete("/{condense_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_condense(condense_id: str):
+    """Remove a condensed video and all its files. Doubles as CANCEL for an in-progress cut: it
+    stops the running/queued RQ job first, then deletes everything."""
+
+    from fastapi import Response
+
+    settings = get_settings()
+    base = _base_dir(settings, condense_id)
+    if not base.is_dir():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Condense task not found")
+
+    # Best-effort stop of the worker job if this cut is still running/queued (a cancel).
+    conn = Redis.from_url(settings.redis_url)
+    rq_id = _rq_id(condense_id)
+    try:
+        from rq.command import send_stop_job_command
+
+        send_stop_job_command(conn, rq_id)  # kills a running job's work horse
+    except Exception:
+        pass
+    try:
+        RqJob.fetch(rq_id, connection=conn).cancel()  # removes a queued job
+    except Exception:
+        pass
+
+    shutil.rmtree(base, ignore_errors=True)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{condense_id}/download", response_class=FileResponse)

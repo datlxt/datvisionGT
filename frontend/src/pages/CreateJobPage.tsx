@@ -8,11 +8,12 @@ import {
   useState,
 } from "react";
 
+import { CondensedList } from "../components/CondensedList";
 import { Icon } from "../components/Icon";
 import { PageHeader, StatusBadge } from "../components/ui";
 import { api } from "../lib/api";
 import { formatBytes, formatTime } from "../lib/format";
-import type { Job } from "../types";
+import type { CondenseStatus, Job } from "../types";
 
 const acceptedExtensions = [".mp4", ".mov", ".avi", ".mkv", ".m4v"];
 
@@ -49,10 +50,12 @@ function SelectionCard({
 }
 
 export function CreateJobPage({
+  initialCondensed = null,
   initialVehicleType = "motorcycle",
   onDraftSaved,
   onStarted,
 }: {
+  initialCondensed?: CondenseStatus | null;
   initialVehicleType?: "motorcycle" | "car";
   onDraftSaved: (job: Job) => void;
   onStarted: (job: Job) => void;
@@ -68,6 +71,10 @@ export function CreateJobPage({
   const roiVideoRef = useRef<HTMLVideoElement>(null);
   const [roi, setRoi] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [laneDirection, setLaneDirection] = useState<"" | "up" | "down" | "left" | "right">("");
+  // Video source origin: a fresh upload from disk, or one of the user's already-condensed videos.
+  const [sourceMode, setSourceMode] = useState<"new" | "condensed">("new");
+  const [condensedPick, setCondensedPick] = useState<CondenseStatus | null>(null);
+  const hasSource = Boolean(file) || Boolean(condensedPick);
   const roiDragStart = useRef<{ x: number; y: number } | null>(null);
 
   function roiPoint(event: PointerEvent<HTMLDivElement>) {
@@ -107,14 +114,46 @@ export function CreateJobPage({
     [preview],
   );
 
+  // Handed a condensed video from the Cắt video page: open on the "Chọn video đã cắt" tab with it
+  // already selected, so the reviewer lands straight on the ROI step. Runs once (App remounts this
+  // page via key when the chosen video changes).
+  useEffect(() => {
+    if (!initialCondensed) return;
+    setSourceMode("condensed");
+    setCondensedPick(initialCondensed);
+    setPreview(`/api/v1/condense/${initialCondensed.id}/download`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function setSelectedFile(selected: File | null) {
-    if (preview) URL.revokeObjectURL(preview);
+    if (preview?.startsWith("blob:")) URL.revokeObjectURL(preview);
     setFile(selected);
+    setCondensedPick(null);
     setPreview(selected ? URL.createObjectURL(selected) : null);
     setDraft(null);
     setMessage(null);
     setRoi(null);
     setLaneDirection("");
+  }
+
+  // Pick one of the user's already-condensed videos as the source. The job is created lazily (on
+  // Save/Start) via /jobs/from-condense so the current vehicle type applies; here we just load the
+  // condensed video into the ROI preview so the reviewer can draw the lane on it.
+  function pickCondensed(item: CondenseStatus) {
+    if (preview?.startsWith("blob:")) URL.revokeObjectURL(preview);
+    setFile(null);
+    setCondensedPick(item);
+    setPreview(`/api/v1/condense/${item.id}/download`);
+    setDraft(null);
+    setMessage(null);
+    setRoi(null);
+    setLaneDirection("");
+  }
+
+  function switchSource(mode: "new" | "condensed") {
+    if (mode === sourceMode) return;
+    setSourceMode(mode);
+    setSelectedFile(null);
   }
 
   function chooseFile(event: ChangeEvent<HTMLInputElement>) {
@@ -135,6 +174,15 @@ export function CreateJobPage({
   }
 
   async function createDraft() {
+    if (condensedPick) {
+      const importedDraft = await api<Job>(
+        `/api/v1/jobs/from-condense/${condensedPick.id}?vehicle_type=${vehicleType}`,
+        { method: "POST" },
+      );
+      setDraft(importedDraft);
+      onDraftSaved(importedDraft);
+      return importedDraft;
+    }
     if (!file) throw new Error("Vui lòng chọn video trước.");
     const created = await api<Job>(`/api/v1/jobs?vehicle_type=${vehicleType}`, {
       method: "POST",
@@ -152,7 +200,7 @@ export function CreateJobPage({
   }
 
   async function saveDraft() {
-    if (!file || busyAction) return;
+    if (!hasSource || busyAction) return;
     setBusyAction("draft");
     setMessage(null);
     try {
@@ -172,7 +220,7 @@ export function CreateJobPage({
   }
 
   async function start() {
-    if (!file || busyAction) return;
+    if (!hasSource || busyAction) return;
     setBusyAction("start");
     setMessage(null);
     try {
@@ -230,44 +278,84 @@ export function CreateJobPage({
               </button>
             </div>
 
-            <div
-              className={`upload-dropzone ${dragging ? "dragging" : ""}`}
-              onClick={() => inputRef.current?.click()}
-              onDragEnter={(event) => {
-                event.preventDefault();
-                setDragging(true);
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={dropFile}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") inputRef.current?.click();
-              }}
-            >
-              <input
-                accept="video/*,.mkv,.m4v"
-                onChange={chooseFile}
-                ref={inputRef}
-                type="file"
-              />
-              <span className="upload-symbol">
-                <Icon name="upload" size={28} />
-              </span>
-              <strong>Kéo thả video vào đây hoặc bấm để chọn</strong>
-              <p>MP4, AVI, MOV, MKV, M4V · Tối đa 2 GB</p>
+            <div className="source-origin" role="tablist">
+              <button
+                aria-selected={sourceMode === "new"}
+                className={sourceMode === "new" ? "active" : ""}
+                onClick={() => switchSource("new")}
+                role="tab"
+                type="button"
+              >
+                <Icon name="upload" size={16} /> Tải video mới
+              </button>
+              <button
+                aria-selected={sourceMode === "condensed"}
+                className={sourceMode === "condensed" ? "active" : ""}
+                onClick={() => switchSource("condensed")}
+                role="tab"
+                type="button"
+              >
+                <Icon name="scissors" size={16} /> Chọn video đã cắt
+              </button>
             </div>
 
-            {file && (
+            {sourceMode === "new" && (
+              <div
+                className={`upload-dropzone ${dragging ? "dragging" : ""}`}
+                onClick={() => inputRef.current?.click()}
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  setDragging(true);
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={dropFile}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") inputRef.current?.click();
+                }}
+              >
+                <input
+                  accept="video/*,.mkv,.m4v"
+                  onChange={chooseFile}
+                  ref={inputRef}
+                  type="file"
+                />
+                <span className="upload-symbol">
+                  <Icon name="upload" size={28} />
+                </span>
+                <strong>Kéo thả video vào đây hoặc bấm để chọn</strong>
+                <p>MP4, AVI, MOV, MKV, M4V · Tối đa 2 GB</p>
+              </div>
+            )}
+
+            {sourceMode === "condensed" && !condensedPick && (
+              <CondensedList
+                mode="pick"
+                onPick={pickCondensed}
+                picking={Boolean(busyAction)}
+              />
+            )}
+
+            {hasSource && (
               <div className="selected-file">
                 {preview && <video muted preload="metadata" src={preview} />}
                 <div className="selected-file-copy">
-                  <strong title={file.name}>{file.name}</strong>
+                  <strong title={file ? file.name : condensedPick?.source_name ?? undefined}>
+                    {file ? file.name : condensedPick?.source_name ?? "Video đã cắt"}
+                  </strong>
                   <div>
-                    <span>
-                      <Icon name="file" size={15} /> {formatBytes(file.size)}
-                    </span>
+                    {file ? (
+                      <span>
+                        <Icon name="file" size={15} /> {formatBytes(file.size)}
+                      </span>
+                    ) : (
+                      <span>
+                        <Icon name="scissors" size={15} /> Đã cắt · giữ{" "}
+                        {formatTime(condensedPick?.condensed_duration_ms ?? 0)}
+                      </span>
+                    )}
                     {draft?.duration_ms !== null && draft && (
                       <span>
                         <Icon name="clock" size={15} /> {formatTime(draft.duration_ms)}
@@ -281,7 +369,11 @@ export function CreateJobPage({
                     {draft?.fps && <span>{draft.fps.toFixed(1)} FPS</span>}
                   </div>
                   <StatusBadge tone={draft ? "success" : "info"}>
-                    {draft ? `Đã lưu ${draft.job_code}` : "Sẵn sàng tải lên"}
+                    {draft
+                      ? `Đã lưu ${draft.job_code}`
+                      : file
+                        ? "Sẵn sàng tải lên"
+                        : "Sẵn sàng xử lý"}
                   </StatusBadge>
                 </div>
                 <button
@@ -289,11 +381,19 @@ export function CreateJobPage({
                   disabled={Boolean(busyAction)}
                   onClick={(event) => {
                     event.stopPropagation();
-                    inputRef.current?.click();
+                    if (file) {
+                      inputRef.current?.click();
+                    } else {
+                      if (preview?.startsWith("blob:")) URL.revokeObjectURL(preview);
+                      setCondensedPick(null);
+                      setPreview(null);
+                      setDraft(null);
+                      setRoi(null);
+                    }
                   }}
                   type="button"
                 >
-                  Thay file
+                  {file ? "Thay file" : "Chọn video khác"}
                 </button>
               </div>
             )}
@@ -515,7 +615,7 @@ export function CreateJobPage({
             <div>
               <button
                 className="button button-secondary"
-                disabled={!file || Boolean(busyAction)}
+                disabled={!hasSource || Boolean(busyAction)}
                 onClick={saveDraft}
                 type="button"
               >
@@ -523,7 +623,7 @@ export function CreateJobPage({
               </button>
               <button
                 className="button button-primary"
-                disabled={!file || Boolean(busyAction)}
+                disabled={!hasSource || Boolean(busyAction)}
                 onClick={start}
                 type="button"
               >

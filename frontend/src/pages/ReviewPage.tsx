@@ -161,6 +161,29 @@ function isReliableRead(event: EventResult): boolean {
   );
 }
 
+// The plate a MAJORITY (≥2 of local + AI-1 + AI-2) read — regardless of WHICH two. This mirrors the
+// backend `_consensus_plate` that auto-fills GT: a 2/3 agreement wins even when the local model is
+// the odd one out, so the default fill never depends on local. Returns null if the readers are split.
+function consensusPlate(event: EventResult): string | null {
+  const norm = (value: string | null | undefined) =>
+    (value ?? "").toUpperCase().replace(/Đ/g, "D").replace(/[^A-Z0-9]/g, "");
+  const reads = [event.normalized_plate, event.cloud_plate, event.qwen_plate]
+    .map(norm)
+    .filter(Boolean);
+  if (reads.length === 0) return null;
+  const counts = new Map<string, number>();
+  for (const read of reads) counts.set(read, (counts.get(read) ?? 0) + 1);
+  let best: string | null = null;
+  let bestCount = 0;
+  for (const [value, count] of counts) {
+    if (count > bestCount) {
+      best = value;
+      bestCount = count;
+    }
+  }
+  return bestCount >= 2 && 2 * bestCount > reads.length ? best : null;
+}
+
 // Turn the internal engine flags into plain Vietnamese the reviewer can act on. Flags not in
 // this map (dedup / motion bookkeeping) are hidden — they are noise for a human reviewer.
 const FLAG_META: Record<string, { label: string; tone: "warn" | "info" | "ok" }> = {
@@ -1227,9 +1250,17 @@ export function ReviewPage({ job }: { job: Job }) {
             </section>
 
             <GtPanel
-              key={selected.track_id}
+              // Key on the STORED values, not just the track: the record can arrive/change AFTER
+              // this panel mounts (GT loads late, or the cross-check auto-fills gt_text + verifies),
+              // and a plain track key wouldn't remount → the inputs would keep their stale (empty)
+              // initial state. Re-keying on the persisted fields re-seeds the inputs when the saved
+              // value changes, but NOT while the reviewer types (local edits don't touch the record).
+              key={`${selected.track_id}:${selectedGt?.verify_status ?? ""}:${
+                selectedGt?.gt_text ?? ""
+              }:${selectedGt?.classification ?? ""}`}
               cloudQuality={selected.cloud_quality}
               cloudQualityAll={selected.cloud_quality_all}
+              defaultPlate={consensusPlate(selected)}
               onChanged={() => setGtReload((value) => value + 1)}
               qualityDisagree={selected.quality_flags.includes("QUALITY_DISAGREEMENT")}
               suspectNoPlate={selected.classification === "NO_PLATE"}
@@ -1432,6 +1463,7 @@ function GtPanel({
   onChanged,
   cloudQuality,
   cloudQualityAll,
+  defaultPlate,
   qualityDisagree,
   suspectNoPlate,
   suspectLogo,
@@ -1440,6 +1472,7 @@ function GtPanel({
   onChanged: () => void;
   cloudQuality?: string | null;
   cloudQualityAll?: string[];
+  defaultPlate?: string | null;
   qualityDisagree?: boolean;
   suspectNoPlate?: boolean;
   suspectLogo?: boolean;
@@ -1447,8 +1480,15 @@ function GtPanel({
   // Only a GENUINE no-plate case (the pipeline found no plate at all) defaults to "Xe không biển"
   // with an empty GT. A "suspected logo" (SUSPECTED_NON_PLATE) still has a real plate read, so we
   // KEEP that read and only hint the reviewer to check it — never auto-blank a real plate.
+  // Prefill the GT plate, in order of trust: the stored gt_text → the 2/3 CONSENSUS the readers
+  // agreed on (``defaultPlate``, which does NOT require local) → the local read as a last resort.
+  // (``??`` alone wasn't enough: an EMPTY-STRING gt_text isn't nullish, so it wouldn't fall through.)
   const [gtText, setGtText] = useState(
-    record?.gt_text ?? (suspectNoPlate ? "" : record?.predicted_text) ?? "",
+    (record?.gt_text && record.gt_text.trim()
+      ? record.gt_text
+      : suspectNoPlate
+        ? ""
+        : defaultPlate || record?.predicted_text) ?? "",
   );
   const [note, setNote] = useState(record?.note ?? "");
   // Prefill the category with AI-1's label as a SUGGESTION even when the two AIs disagree — the
@@ -1564,9 +1604,15 @@ function GtPanel({
         />
       </label>
       {error && <p className="backend-note">{error}</p>}
+      {isVerified && (
+        <p className="quality-hint">
+          Đã xác nhận (tự duyệt khi ≥2/3 model khớp). Con người vẫn toàn quyền sửa biển / phân loại
+          rồi bấm <strong>“Lưu thay đổi”</strong> để ghi đè.
+        </p>
+      )}
       <div className="gt-actions">
         <button className="button button-secondary" disabled={busy} onClick={save} type="button">
-          Lưu nháp
+          {isVerified ? "Lưu thay đổi" : "Lưu nháp"}
         </button>
         {isDiscarded ? (
           <button
