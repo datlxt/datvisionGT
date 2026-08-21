@@ -2237,22 +2237,30 @@ code {
 }
 
 .processing-page .live-view {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
 }
 
-/* Height is driven by the column now, not a viewport formula — the frame letterboxes the stream. */
+/* A CONSISTENT 16:9 stage: it scales with the column width, but its height is capped and its width
+   is limited so the box stays EXACTLY 16:9 at every screen size — it never letterboxes and no longer
+   depends on how the flex column happened to settle. This fixes the box changing shape before vs
+   after the video loads, and looking different on a small vs a large screen. */
 .processing-page .live-stage {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 0 auto;
+  aspect-ratio: 16 / 9;
+  width: min(100%, calc((100vh - 300px) * 16 / 9));
+  max-width: 100%;
   max-height: none;
-  aspect-ratio: auto;
+  margin-inline: auto;
 }
 
 .processing-page .video-card > video {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 0 auto;
+  aspect-ratio: 16 / 9;
+  width: min(100%, calc((100vh - 300px) * 16 / 9));
+  max-width: 100%;
   height: auto;
+  margin-inline: auto;
 }
 
 /* Safety valve for very short windows: scroll the steps panel internally, never the whole page. */
@@ -2271,7 +2279,8 @@ code {
   .processing-page .live-stage {
     flex: none;
     aspect-ratio: 16 / 9;
-    max-height: calc(100vh - 260px);
+    width: 100%;
+    max-height: none;
   }
   .processing-page .pipeline-card {
     overflow-y: visible;
@@ -2327,6 +2336,10 @@ code {
   inset: 0;
   width: 100%;
   height: 100%;
+  /* Letterbox the box overlay EXACTLY like the <img> (same source aspect) so detection boxes stay
+     aligned with the video when the stage is a different aspect than the frame (large/zoomed screen)
+     — without this the canvas stretched to fill the black bars and the boxes drifted off the image. */
+  object-fit: contain;
 }
 
 .live-waiting {
@@ -4228,8 +4241,8 @@ button.selection-card:hover:not(.selected) {
 
 .condense-stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
   margin: 18px 0;
 }
 
@@ -4237,7 +4250,8 @@ button.selection-card:hover:not(.selected) {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 14px;
+  min-width: 0;
+  padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--page);
@@ -4245,12 +4259,19 @@ button.selection-card:hover:not(.selected) {
 
 .condense-stats span {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
+  white-space: nowrap; /* keep the label on one line so the last card doesn't wrap to 3 rows */
 }
 
+/* Smaller, tabular numbers on a single line — the long time values no longer bloat the cards or
+   squeeze the "Số đoạn giữ" card, so all four read as one balanced row. */
 .condense-stats strong {
   color: var(--navy);
-  font-size: 22px;
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .condense-stat-highlight {
@@ -4475,6 +4496,6 @@ button.selection-card:hover:not(.selected) {
   }
 
   .condense-stats strong {
-    font-size: 20px;
+    font-size: 19px;
   }
 }

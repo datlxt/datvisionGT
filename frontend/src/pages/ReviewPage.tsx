@@ -1604,12 +1604,6 @@ function GtPanel({
         />
       </label>
       {error && <p className="backend-note">{error}</p>}
-      {isVerified && (
-        <p className="quality-hint">
-          Đã xác nhận (tự duyệt khi ≥2/3 model khớp). Con người vẫn toàn quyền sửa biển / phân loại
-          rồi bấm <strong>“Lưu thay đổi”</strong> để ghi đè.
-        </p>
-      )}
       <div className="gt-actions">
         <button className="button button-secondary" disabled={busy} onClick={save} type="button">
           {isVerified ? "Lưu thay đổi" : "Lưu nháp"}
