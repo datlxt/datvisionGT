@@ -28,11 +28,15 @@ function formatCutDate(iso: string | null | undefined): string {
 export function CondensedList({
   mode,
   onPick,
+  onSendToGt,
+  onDeleted,
   picking = false,
   reloadKey = 0,
 }: {
   mode: "manage" | "pick";
   onPick?: (item: CondenseStatus) => void;
+  onSendToGt?: (item: CondenseStatus) => void;
+  onDeleted?: (id: string) => void;
   picking?: boolean;
   reloadKey?: number;
 }) {
@@ -64,6 +68,9 @@ export function CondensedList({
     setItems((current) => current?.filter((entry) => entry.id !== item.id) ?? current);
     setConfirmDelete(null);
     setOpenId(null);
+    // Tell the parent so anything ELSE showing this same cut (e.g. the result card above the list)
+    // clears too, instead of lingering until a manual reload.
+    onDeleted?.(item.id);
     fetch(`/api/v1/condense/${item.id}`, { method: "DELETE" })
       .then((response) => {
         if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
@@ -174,6 +181,16 @@ export function CondensedList({
             </div>
 
             <div className="condense-actions">
+              {onSendToGt && (
+                <button
+                  className="button button-primary"
+                  onClick={() => onSendToGt(open)}
+                  type="button"
+                >
+                  Đưa sang tạo GT
+                  <Icon name="arrow" size={18} />
+                </button>
+              )}
               <a className="button button-secondary" href={`/api/v1/condense/${open.id}/download`}>
                 <Icon name="download" size={18} /> Tải video về
               </a>

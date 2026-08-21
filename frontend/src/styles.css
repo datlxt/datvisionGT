@@ -3998,24 +3998,45 @@ button.selection-card:hover:not(.selected) {
 
 /* Setup panel: video on the left, cut level + action on the right, split by a divider. */
 .condense-setup {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  padding: 0;
-  overflow: hidden;
-}
-
-.condense-col {
   display: flex;
   flex-direction: column;
-  padding: 22px 24px;
+  gap: 18px;
+  padding: 22px 24px 24px;
 }
 
-.condense-col-divide {
+.condense-setup > .section-heading {
+  margin-bottom: 0;
+}
+
+/* Once a video is chosen: lane ROI (left, the big visual) + cut controls (right, vertically
+   centred so they sit BESIDE the video instead of leaving one column empty). */
+.condense-config {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr);
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.condense-roi-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding-right: 22px;
+}
+
+.condense-cut-col {
+  display: flex;
+  flex-direction: column;
+  justify-content: center; /* centre the controls vertically against the taller ROI video */
+  gap: 14px;
+  min-width: 0;
+  padding-left: 22px;
   border-left: 1px solid var(--border);
 }
 
-.condense-col .section-heading {
-  margin-bottom: 16px;
+.condense-cut-col .section-heading {
+  margin-bottom: 0;
 }
 
 .condense-gap {
@@ -4062,33 +4083,9 @@ button.selection-card:hover:not(.selected) {
   margin-top: 16px;
 }
 
-/* Pin the primary action to the bottom of its column so both columns bottom-align cleanly. */
-.condense-actions-footer {
-  margin-top: auto;
-  padding-top: 16px;
-}
-
-/* Compact dropzone — the setup columns are already narrow, so it needn't be a tall hero box. */
-.condense-col .upload-dropzone {
-  min-height: 128px;
-  padding: 18px;
-}
-
-.condense-col .upload-symbol {
-  width: 40px;
-  height: 40px;
-  margin-bottom: 9px;
-}
-
-/* Selected file inside a narrow column: thumb + copy on one row, "Thay file" on its own line. */
-.condense-col .selected-file {
-  grid-template-columns: 116px minmax(0, 1fr);
+/* Step-1 file bar spans the full card width now, not a narrow column. */
+.condense-setup .selected-file {
   margin-top: 0;
-}
-
-.condense-col .selected-file video {
-  width: 116px;
-  height: 68px;
 }
 
 .selected-file-swap {
@@ -4465,12 +4462,19 @@ button.selection-card:hover:not(.selected) {
     grid-template-columns: repeat(2, 1fr);
   }
 
-  /* Stack the setup columns; the divider moves from the side to the top. */
-  .condense-setup {
+  /* Stack the ROI + cut controls; the divider moves from the side to the top. */
+  .condense-config {
     grid-template-columns: 1fr;
   }
 
-  .condense-col-divide {
+  .condense-roi-col {
+    padding-right: 0;
+  }
+
+  .condense-cut-col {
+    justify-content: flex-start;
+    padding-left: 0;
+    padding-top: 16px;
     border-left: 0;
     border-top: 1px solid var(--border);
   }
