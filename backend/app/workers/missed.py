@@ -39,13 +39,12 @@ from app.vision.plate.domain import plate_key
 _MIN_GAP_MS = 6_000
 # Each detected vehicle interval is padded by this on EACH side before computing gaps, so a car's
 # lead-in / standstill overhang (its track can end while it still idles at the barrier) is treated as
-# "covered" — otherwise the brief empty stretch next to a detected car gets flagged as a false miss.
-# Net effect: only stretches empty for more than ~(2×pad + min gap) become candidates. 6s → a real
-# gap must exceed ~18s (measured from the previous vehicle's track END to the next one's START).
-_OVERHANG_PAD_MS = 6_000
-# Ignore this much at each gap edge: a vehicle detected right up to the boundary is often still
-# leaving/entering frame there, so sampling the edge would re-flag an already-counted pass.
-_EDGE_MARGIN_MS = 2_000
+# "covered". Tuned to OVER-WARN (a missed vehicle is far worse than a spare warning the human dismisses
+# in one click): 4s → a real gap must exceed ~14s (was 18s) so more borderline stretches get scanned.
+_OVERHANG_PAD_MS = 4_000
+# Ignore this much at each gap edge. Kept small so a vehicle passing near a gap boundary (e.g. a slow
+# scooter being WALKED through) is still sampled instead of inset away.
+_EDGE_MARGIN_MS = 1_000
 # If the AI reads a plate in a gap that matches a detected vehicle within this window, it is the SAME
 # pass (a car idling past its track's end), not a miss — so the gap is dropped.
 _SAME_PASS_WINDOW_MS = 90_000
@@ -53,10 +52,11 @@ _SAME_PASS_WINDOW_MS = 90_000
 # overhang (its track can end while it still idles at the barrier), NOT a miss — so it's dropped.
 # This is the main filter, since the AI usually can't read the small/far plate in a wide gap frame.
 _ADJACENT_VEHICLE_MS = 15_000
-# Sampled frames probed per gap (evenly spaced across the gap). One YES is enough to keep the gap.
-_SAMPLES_PER_GAP = 3
+# Sampled frames probed per gap (evenly spaced). Raised so a vehicle that only shows for a moment
+# inside a gap (or near its edge) isn't skipped between samples. One YES keeps the gap.
+_SAMPLES_PER_GAP = 6
 # Hard cap on AI calls per job so a pathological (long, sparse) video can't run up cost / time.
-_MAX_PROBES = 90
+_MAX_PROBES = 150
 _RECALL_CONCURRENCY = 6
 
 

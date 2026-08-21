@@ -187,7 +187,7 @@ export function CondensedList({
                   onClick={() => onSendToGt(open)}
                   type="button"
                 >
-                  Đưa sang tạo GT
+                  Chuyển sang tạo GT
                   <Icon name="arrow" size={18} />
                 </button>
               )}

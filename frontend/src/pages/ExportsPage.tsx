@@ -73,12 +73,12 @@ export function ExportsPage({
       <div className="export-notice card">
         <Icon name="database" size={22} />
         <div>
-          <strong>2 loại file — đừng nhầm:</strong>
+          <strong>Hai loại tệp — cần phân biệt rõ:</strong>
           <p>
-            🟢 <strong>Plate Report (bản nháp)</strong>: TẤT CẢ case model + Confidence + ảnh crop —
-            để <strong>soát / đối chiếu</strong>.{"  "}
-            🔵 <strong>GT Final (bản chốt)</strong>: CHỈ case đã <strong>VERIFIED</strong>, layout
-            benchmark + Precision/Recall tự tính — <strong>bộ GT bàn giao</strong> để chấm model khác.
+            🟢 <strong>Plate Report (bản nháp)</strong>: tất cả lượt xe do máy đọc, kèm độ tin và ảnh
+            crop — dùng để <strong>soát / đối chiếu</strong>.{"  "}
+            🔵 <strong>GT Final (bản chốt)</strong>: chỉ các lượt đã <strong>xác nhận</strong>, theo bố
+            cục benchmark, tự tính Precision/Recall — <strong>bộ GT bàn giao</strong> để chấm model khác.
           </p>
         </div>
       </div>
@@ -119,7 +119,7 @@ export function ExportsPage({
         <header>
           <div>
             <h2>Danh sách job</h2>
-            <p>Trạng thái và tiến độ lấy từ processing jobs.</p>
+            <p>Trạng thái và tiến độ cập nhật từ hệ thống xử lý.</p>
           </div>
         </header>
         {jobs.length === 0 ? (

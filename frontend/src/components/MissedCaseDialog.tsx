@@ -80,7 +80,7 @@ export function MissedCaseDialog({
   return (
     <div className="modal-overlay" onClick={() => !busy && onClose()} role="presentation">
       <div
-        aria-label="Bổ sung case bỏ sót"
+        aria-label="Bổ sung xe bỏ sót"
         aria-modal="true"
         className="modal-card"
         onClick={(event) => event.stopPropagation()}
@@ -89,10 +89,10 @@ export function MissedCaseDialog({
         <span className="modal-icon">
           <Icon name="plus" size={22} />
         </span>
-        <h3>Bổ sung case bỏ sót</h3>
+        <h3>Bổ sung xe bỏ sót</h3>
         <p>
-          Thêm 1 lượt xe model bỏ sót. Thời điểm điền sẵn theo vị trí video đang tua; case được
-          neo vào frame evidence thật gần thời điểm đó nhất.
+          Thêm một lượt xe mà hệ thống đã bỏ sót. Thời điểm được điền sẵn theo vị trí video hiện
+          tại; lượt xe sẽ được neo vào khung hình bằng chứng gần thời điểm đó nhất.
         </p>
 
         <div className="missed-form">

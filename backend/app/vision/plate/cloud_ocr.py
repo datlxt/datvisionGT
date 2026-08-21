@@ -351,13 +351,14 @@ def check_vehicle_openai(image_bytes: bytes, settings: Settings) -> bool | None:
 
 _GAP_INSPECT_PROMPT = (
     "Đây là ảnh cắt từ camera một LÀN xe (trạm/bãi), nhìn từ phía sau xe.\n"
-    "1) Trong ảnh có MỘT CHIẾC XE (xe máy hoặc ô tô) đang ở trong làn không? Bỏ qua người đi bộ,"
-    " bóng đổ, vệt sáng, cột/biển hiệu, làn trống.\n"
-    "2) Nếu CÓ xe: nhìn thấy BIỂN SỐ không? Nếu thấy, đọc biển (chỉ A-Z và 0-9, bỏ gạch/chấm, gộp 2"
-    " dòng thành 1 chuỗi; Đ đọc thành D). Không thấy/không đọc được thì để biển rỗng.\n"
+    "1) Trong ảnh có BẤT KỲ PHƯƠNG TIỆN nào trong làn không? Tính CẢ: xe máy, ô tô, xe điện, xe đạp,"
+    " xe thồ / ba gác, VÀ xe đang được DẮT BỘ hoặc ĐẨY (người dắt/đẩy xe vẫn tính là CÓ xe). Chỉ coi"
+    " là KHÔNG có xe khi thật sự trống (người đi bộ tay không, bóng đổ, vệt sáng, cột/biển hiệu).\n"
+    "2) Nếu CÓ xe: đọc BIỂN SỐ nếu thấy (chỉ A-Z và 0-9, bỏ gạch/chấm, gộp 2 dòng thành 1 chuỗi; Đ"
+    " đọc thành D). Không có / không đọc được biển thì để rỗng — xe KHÔNG BIỂN vẫn tính là CÓ xe.\n"
     "3) Loại xe: 'motorcycle' hoặc 'car' (rỗng nếu không rõ).\n"
-    "Trả về JSON thuần: {\"vehicle\": true/false, \"plate\": \"...\", \"vehicle_type\": \"...\"}. "
-    "vehicle=true CHỈ khi chắc chắn có xe trong làn."
+    "Trả về JSON thuần: {\"vehicle\": true/false, \"plate\": \"...\", \"vehicle_type\": \"...\"}.\n"
+    "NGUYÊN TẮC: thà báo NHẦM còn hơn BỎ SÓT — nếu CÓ hoặc NGHI CÓ phương tiện thì đặt vehicle=true."
 )
 
 

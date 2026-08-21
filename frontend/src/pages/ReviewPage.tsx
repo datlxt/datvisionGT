@@ -264,16 +264,16 @@ function CrossCheckCard({ event }: { event: EventResult }) {
   const agree = event.quality_flags.includes("OCR_AGREE");
   const nonPlate = event.quality_flags.includes("SUSPECTED_NON_PLATE");
   const verdict = unverified
-    ? { cls: "info", icon: "clock" as const, text: "Chưa kiểm chéo được." }
+    ? { cls: "info", icon: "clock" as const, text: "Chưa đối chiếu được." }
     : nonPlate
-      ? { cls: "diff", icon: "alert" as const, text: "AI không xác nhận được biển — nghi logo/decal. Chọn \"Xe không biển\" hoặc Loại." }
+      ? { cls: "diff", icon: "alert" as const, text: "AI không xác nhận được biển số — nghi logo/tem dán. Chọn \"Xe không biển\" hoặc Loại bỏ." }
       : disagree
-      ? { cls: "diff", icon: "alert" as const, text: "3 nguồn đọc KHÁC nhau — chọn biển đúng." }
+      ? { cls: "diff", icon: "alert" as const, text: "3 nguồn đọc khác nhau — vui lòng chọn biển số đúng." }
       : unanimous
-        ? { cls: "same", icon: "check" as const, text: "3 nguồn khớp — đáng tin." }
+        ? { cls: "same", icon: "check" as const, text: "3 nguồn khớp — kết quả đáng tin cậy." }
         : agree
-          ? { cls: "warn", icon: "check" as const, text: "2/3 khớp — đã lấy, xem lại nếu cần." }
-          : { cls: "info", icon: "eye" as const, text: "Đã đối chiếu AI." };
+          ? { cls: "warn", icon: "check" as const, text: "2/3 nguồn khớp — đã điền sẵn, kiểm tra lại nếu cần." }
+          : { cls: "info", icon: "eye" as const, text: "Đã đối chiếu với AI." };
 
   return (
     <div className={`crosscheck crosscheck-${verdict.cls}`}>
@@ -661,8 +661,12 @@ export function ReviewPage({ job }: { job: Job }) {
     results?.events.find((event) => event.track_id === selectedId) ??
     filteredEvents[0] ??
     null;
-  const selectedIndex = selected
-    ? filteredEvents.findIndex((event) => event.track_id === selected.track_id)
+  // Prev/Next walk the FULL ordered list, not the current filter tab — otherwise confirming a case
+  // drops it out of a filter (e.g. "Cần xử lý"), its index becomes -1, and "Bản ghi sau" wrongly
+  // disables. Navigating the full list keeps Next working after every verify.
+  const navEvents = results?.events ?? [];
+  const navIndex = selected
+    ? navEvents.findIndex((event) => event.track_id === selected.track_id)
     : -1;
   const selectedGt = selected ? gtByTrack.get(selected.track_id) ?? null : null;
   const selectedStartMs = selected?.start_timestamp_ms ?? 0;
@@ -758,7 +762,7 @@ export function ReviewPage({ job }: { job: Job }) {
           onClick={() => setShowMissed(true)}
           type="button"
         >
-          <Icon name="plus" size={16} /> Bổ sung case bỏ sót
+          <Icon name="plus" size={16} /> Bổ sung xe bỏ sót
         </button>
         <button
           className="button button-secondary button-compact"
@@ -808,9 +812,9 @@ export function ReviewPage({ job }: { job: Job }) {
         <div className="filter-tabs">
           {[
             ["ALL", "Tất cả", results.total],
-            ["RECOGNIZED", "Model ra biển", readCounts.reliable],
-            ["UNCERTAIN", "Đọc chưa chắc", readCounts.uncertain],
-            ["NO_PLATE", "Không biển", readCounts.noPlate],
+            ["RECOGNIZED", "Đọc được biển", readCounts.reliable],
+            ["UNCERTAIN", "Chưa chắc chắn", readCounts.uncertain],
+            ["NO_PLATE", "Không có biển", readCounts.noPlate],
             ["DIVIDER", "", 0],
             ["CHECK", "Cần xử lý", needCheckCount],
           ].map(([value, label, count]) =>
@@ -836,7 +840,7 @@ export function ReviewPage({ job }: { job: Job }) {
           <aside className="card track-panel">
             <header>
               <div>
-                <h2>Danh sách Track</h2>
+                <h2>Danh sách lượt xe</h2>
                 <span>{filteredEvents.length}</span>
               </div>
               <p>Mỗi track là một lượt xe do model tạo.</p>
@@ -1008,8 +1012,8 @@ export function ReviewPage({ job }: { job: Job }) {
                         }}
                         title={
                           gap.confirmed
-                            ? "AI thấy có xe — bấm để xem kết quả AI"
-                            : "Khoảng trống — tua tới đầu khoảng để tự soát"
+                            ? "AI phát hiện có xe — nhấn để xem chi tiết"
+                            : "Khoảng trống — nhấn để tua tới đầu khoảng và tự kiểm tra"
                         }
                         type="button"
                       >
@@ -1024,7 +1028,7 @@ export function ReviewPage({ job }: { job: Job }) {
                 {openGap && openGap.confirmed && (
                   <div className="gap-detail">
                     {openGap.frameUrl && (
-                      <img alt="Khung AI thấy" className="gap-detail-frame" src={openGap.frameUrl} />
+                      <img alt="Khung hình AI phát hiện" className="gap-detail-frame" src={openGap.frameUrl} />
                     )}
                     <div className="gap-detail-body">
                       <div className="gap-detail-head">
@@ -1091,10 +1095,10 @@ export function ReviewPage({ job }: { job: Job }) {
                 )}
                 <div className="ct-legend">
                   <span>
-                    <i className="ct-sw ct-verified" /> Đáng tin (AI khớp)
+                    <i className="ct-sw ct-verified" /> Đáng tin cậy (AI khớp)
                   </span>
                   <span>
-                    <i className="ct-sw ct-recognized" /> Đọc chưa chắc
+                    <i className="ct-sw ct-recognized" /> Chưa chắc chắn
                   </span>
                   <span>
                     <i className="ct-sw ct-low_confidence" /> Cần xử lý (gồm xe không biển)
@@ -1150,27 +1154,27 @@ export function ReviewPage({ job }: { job: Job }) {
               </div>
               <dl className="metadata-grid">
                 <div>
-                  <dt>TrackID</dt>
+                  <dt>Mã track</dt>
                   <dd>{selected.track_code}</dd>
                 </div>
                 <div>
-                  <dt>Timestamp</dt>
+                  <dt>Thời điểm</dt>
                   <dd>{formatTime(selected.best_timestamp_ms)}</dd>
                 </div>
                 <div>
-                  <dt>BBox xe</dt>
+                  <dt>Khung xe</dt>
                   <dd>{selected.vehicle_bbox.join(", ")}</dd>
                 </div>
                 <div>
-                  <dt>BBox biển</dt>
+                  <dt>Khung biển</dt>
                   <dd>{selected.plate_bbox?.join(", ") ?? "Không phát hiện"}</dd>
                 </div>
                 <div>
-                  <dt>Số detection xe</dt>
+                  <dt>Số lần bắt xe</dt>
                   <dd>{selected.vehicle_detection_count}</dd>
                 </div>
                 <div>
-                  <dt>Số detection biển</dt>
+                  <dt>Số lần bắt biển</dt>
                   <dd>{selected.plate_detection_count}</dd>
                 </div>
               </dl>
@@ -1194,23 +1198,23 @@ export function ReviewPage({ job }: { job: Job }) {
               <strong className="prediction-value">{resultLabel(selected)}</strong>
               <dl>
                 <div>
-                  <dt>Raw OCR</dt>
+                  <dt>OCR thô</dt>
                   <dd>{selected.raw_plate ?? "Không có"}</dd>
                 </div>
                 <div>
-                  <dt>OCR vote confidence</dt>
+                  <dt>Độ tin OCR (bỏ phiếu)</dt>
                   <dd>{confidence(selected.confidence)}</dd>
                 </div>
                 <div>
-                  <dt>Plate detection</dt>
+                  <dt>Độ tin phát hiện biển</dt>
                   <dd>{confidence(selected.plate_confidence)}</dd>
                 </div>
                 <div>
-                  <dt>Vehicle detection</dt>
+                  <dt>Độ tin phát hiện xe</dt>
                   <dd>{confidence(selected.vehicle_confidence)}</dd>
                 </div>
                 <div>
-                  <dt>Quality score</dt>
+                  <dt>Điểm chất lượng</dt>
                   <dd>{confidence(selected.quality_score)}</dd>
                 </div>
               </dl>
@@ -1270,28 +1274,28 @@ export function ReviewPage({ job }: { job: Job }) {
 
             <footer className="review-navigation">
               <button
-                disabled={selectedIndex <= 0}
+                disabled={navIndex <= 0}
                 onClick={() =>
                   selectTrack(
-                    filteredEvents[selectedIndex - 1].track_id,
-                    filteredEvents[selectedIndex - 1].start_timestamp_ms,
+                    navEvents[navIndex - 1].track_id,
+                    navEvents[navIndex - 1].start_timestamp_ms,
                   )
                 }
                 type="button"
               >
-                ← Record trước
+                ← Bản ghi trước
               </button>
               <button
-                disabled={selectedIndex < 0 || selectedIndex >= filteredEvents.length - 1}
+                disabled={navIndex < 0 || navIndex >= navEvents.length - 1}
                 onClick={() =>
                   selectTrack(
-                    filteredEvents[selectedIndex + 1].track_id,
-                    filteredEvents[selectedIndex + 1].start_timestamp_ms,
+                    navEvents[navIndex + 1].track_id,
+                    navEvents[navIndex + 1].start_timestamp_ms,
                   )
                 }
                 type="button"
               >
-                Record tiếp →
+                Bản ghi sau →
               </button>
             </footer>
           </aside>
@@ -1508,7 +1512,7 @@ function GtPanel({
             <h2>Kiểm duyệt của con người</h2>
           </div>
         </div>
-        <p className="backend-note">Đang tạo GT draft cho track này…</p>
+        <p className="backend-note">Đang tạo bản nháp GT cho lượt xe này…</p>
       </section>
     );
   }
@@ -1553,7 +1557,7 @@ function GtPanel({
         </StatusBadge>
       </div>
       <label>
-        GT Plate
+        Biển GT
         <input
           disabled={isNoPlate}
           onChange={(event) => setGtText(event.target.value.toUpperCase())}
@@ -1574,24 +1578,25 @@ function GtPanel({
       </label>
       {suspectNoPlate ? (
         <p className="quality-hint quality-hint-diff">
-          ⚠ Nghi <strong>xe không biển</strong> (OCR đọc nhầm từ logo/decal). Đã chọn "Xe không
-          biển" — không cần điền số; hoặc bấm <strong>Loại</strong> nếu không phải xe.
+          ⚠ Nghi ngờ <strong>xe không biển</strong> (OCR đọc nhầm từ logo/tem dán). Đã chọn "Xe không
+          biển" — không cần điền số; hoặc chọn <strong>Loại bỏ</strong> nếu không phải phương tiện.
         </p>
       ) : suspectLogo ? (
         <p className="quality-hint quality-hint-diff">
-          ⚠ Nghi <strong>logo/không phải biển</strong> — nhìn kỹ crop. <strong>CÓ biển</strong> thì
-          giữ/sửa số đã điền; đúng là <strong>logo</strong> thì chọn "Xe không biển" hoặc bấm Loại.
+          ⚠ Nghi ngờ <strong>logo/không phải biển số</strong> — vui lòng xem kỹ ảnh crop. Nếu{" "}
+          <strong>CÓ biển</strong>, giữ hoặc chỉnh số đã điền; nếu là <strong>logo</strong>, chọn "Xe
+          không biển" hoặc <strong>Loại bỏ</strong>.
         </p>
       ) : cloudQuality ? (
         <p className={qualityDisagree ? "quality-hint quality-hint-diff" : "quality-hint"}>
           {qualityDisagree ? (
             // 1-1-1 split — the three AIs each said something different; show all so you decide.
             <>
-              ⚠ 3 AI mỗi con một kiểu:{" "}
-              <strong>{(cloudQualityAll ?? []).join(" · ")}</strong> — bạn chọn phân loại.
+              ⚠ 3 AI phân loại khác nhau:{" "}
+              <strong>{(cloudQualityAll ?? []).join(" · ")}</strong> — vui lòng chọn phân loại.
             </>
           ) : (
-            `Đề xuất: "${cloudQuality}" (2/3 AI khớp, đã điền — sửa nếu cần).`
+            `Gợi ý: "${cloudQuality}" (2/3 AI khớp, đã điền sẵn — chỉnh nếu cần).`
           )}
         </p>
       ) : null}
@@ -1624,7 +1629,7 @@ function GtPanel({
             onClick={discard}
             type="button"
           >
-            Loại (Discard)
+            Loại bỏ
           </button>
         )}
       </div>

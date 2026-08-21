@@ -262,7 +262,7 @@ export function OverviewPage({
             <header>
               <div>
                 <h2>Job gần đây</h2>
-                <p>Dữ liệu được lấy trực tiếp từ API processing jobs.</p>
+                <p>Dữ liệu cập nhật trực tiếp từ hệ thống xử lý.</p>
               </div>
             </header>
             {scoped.length === 0 ? (

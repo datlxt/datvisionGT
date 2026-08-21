@@ -192,14 +192,20 @@ def _merge_persisted_motion_candidates(
         # A HUMAN-added case (MANUAL_…) is ground truth the reviewer just asserted — NEVER drop it.
         if event.track_code.startswith("MANUAL"):
             return False
-        weak = event.vehicle_detection_count < min_no_plate_detections
+        # Only a lone BLIP (1-2 detections = a single-frame tracker re-detection of a vehicle idling
+        # at the barrier) is treated as an overhang fragment when it merely sits NEAR a plated pass.
+        # A no-plate track with >= 3 detections is a REAL vehicle transiting the lane — it must NOT be
+        # dropped just for passing within a few seconds of a plated vehicle (that silently lost real
+        # "xe không biển" events). Overlap in time is still a fragment regardless (same moment = same
+        # vehicle re-detected while the plated one is still there).
+        blip = event.vehicle_detection_count <= 2
         for pe in plated:
             overlaps = (
                 event.start_timestamp_ms <= pe.end_timestamp_ms
                 and event.end_timestamp_ms >= pe.start_timestamp_ms
             )
             near = (
-                weak
+                blip
                 and event.start_timestamp_ms <= pe.end_timestamp_ms + no_plate_gap_ms
                 and event.end_timestamp_ms >= pe.start_timestamp_ms - no_plate_gap_ms
             )

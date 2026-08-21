@@ -325,7 +325,7 @@ export function CreateJobPage({
                 <span className="upload-symbol">
                   <Icon name="upload" size={28} />
                 </span>
-                <strong>Kéo thả video vào đây hoặc bấm để chọn</strong>
+                <strong>Kéo thả video vào đây hoặc nhấn để chọn</strong>
                 <p>MP4, AVI, MOV, MKV, M4V · Tối đa 2 GB</p>
               </div>
             )}
@@ -393,7 +393,7 @@ export function CreateJobPage({
                   }}
                   type="button"
                 >
-                  {file ? "Thay file" : "Chọn video khác"}
+                  {file ? "Đổi tệp khác" : "Chọn video khác"}
                 </button>
               </div>
             )}
@@ -586,7 +586,7 @@ export function CreateJobPage({
 
             <div className="sample-rate-row">
               <label>
-                <span>Sample rate</span>
+                <span>Tần suất lấy mẫu</span>
                 <div>
                   <input aria-label="Sample rate" readOnly value="4" />
                   <small>frames / giây</small>

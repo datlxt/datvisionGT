@@ -161,7 +161,7 @@ export function ProcessingPage({
 
           <dl className="pipeline-facts">
             <div>
-              <dt>Stage hiện tại</dt>
+              <dt>Giai đoạn hiện tại</dt>
               <dd>{job.current_stage ?? "Chưa có dữ liệu"}</dd>
             </div>
             <div>
@@ -169,7 +169,7 @@ export function ProcessingPage({
               <dd>{job.processing_mode}</dd>
             </div>
             <div>
-              <dt>Sample rate</dt>
+              <dt>Tần suất lấy mẫu</dt>
               <dd>{job.sample_rate} FPS</dd>
             </div>
           </dl>

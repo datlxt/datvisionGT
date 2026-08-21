@@ -175,7 +175,7 @@ export function CondensePage({
   return (
     <section className="page condense-page">
       <PageHeader
-        description="Bỏ những khoảng thời gian không có xe, dồn các lượt xe lại thành một video ngắn để đưa vào tạo GT."
+        description="Loại bỏ các khoảng thời gian không có xe, dồn các lượt xe thành một video ngắn để đưa vào tạo GT."
         title="Cắt video – bỏ thời gian chết"
       />
 
@@ -210,7 +210,7 @@ export function CondensePage({
             <span className="upload-symbol">
               <Icon name="upload" size={22} />
             </span>
-            <strong>Kéo thả video vào đây hoặc bấm để chọn</strong>
+            <strong>Kéo thả video vào đây hoặc nhấn để chọn</strong>
             <p>MP4, AVI, MOV, MKV, M4V · Tối đa 2 GB</p>
           </div>
         ) : (
@@ -234,7 +234,7 @@ export function CondensePage({
               }}
               type="button"
             >
-              Thay file
+              Đổi tệp khác
             </button>
             <input accept="video/*,.mkv,.m4v" onChange={chooseFile} ref={inputRef} type="file" />
           </div>
@@ -246,7 +246,7 @@ export function CondensePage({
             <section className="condense-roi-col">
               <div className="condense-roi-head">
                 <strong>Khoanh làn (tùy chọn)</strong>
-                <p>Kéo chuột để chỉ giữ xe trong làn bạn chọn — bỏ qua làn khác.</p>
+                <p>Kéo chuột để khoanh làn cần giữ; hệ thống sẽ bỏ qua các làn khác.</p>
               </div>
               <div
                 className="roi-stage"
@@ -281,7 +281,7 @@ export function CondensePage({
                     Xoá vùng
                   </button>
                 ) : (
-                  <em>Chưa khoanh — sẽ quét cả khung hình</em>
+                  <em>Chưa khoanh vùng — sẽ quét toàn khung hình</em>
                 )}
               </div>
             </section>
@@ -291,7 +291,7 @@ export function CondensePage({
                 <span>2</span>
                 <div>
                   <h2>Mức cắt</h2>
-                  <p>Chỉ cắt khoảng trống dài hơn ngưỡng, để không cắt nhầm lúc xe dừng.</p>
+                  <p>Chỉ cắt các khoảng trống dài hơn ngưỡng; đoạn xe dừng ngắn hơn được giữ nguyên.</p>
                 </div>
               </header>
 
@@ -314,8 +314,8 @@ export function CondensePage({
                   <span>60s</span>
                 </div>
                 <small>
-                  Video thật (xe cách nhau 1–2 phút) nên để ~15–20s. Đoạn xe dừng ngắn hơn ngưỡng
-                  vẫn được giữ nguyên.
+                  Với video thực tế (xe cách nhau 1–2 phút), nên đặt khoảng 15–20 giây. Đoạn xe dừng
+                  ngắn hơn ngưỡng vẫn được giữ nguyên.
                 </small>
               </div>
 
@@ -427,7 +427,7 @@ export function CondensePage({
               onClick={() => status && onOpenInCreate(status)}
               type="button"
             >
-              Đưa sang tạo GT
+              Chuyển sang tạo GT
               <Icon name="arrow" size={18} />
             </button>
           </div>
