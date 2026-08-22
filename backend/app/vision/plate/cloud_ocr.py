@@ -25,18 +25,13 @@ from app.core.config import Settings
 
 _MAX_RETRIES = 3
 
-# Must stay in sync with the reviewer dropdown (_QUALITY_OPTIONS in export/plate_report.py).
+# The AI now rates only a COARSE 3-level "mức độ nhận diện" (how readable the plate is) instead of
+# the old 10 fine defect labels — 3 clear levels let the readers agree far more often. The fine
+# defect taxonomy is left for the HUMAN to fill in the export.
 _QUALITY_CATEGORIES = (
-    "Biển đẹp bình thường",
-    "Biển bẩn",
-    "Biển cũ, xước, mờ",
-    "Biển bị che vật lý",
-    "Biển bị dán (icon, decal, trang trí...)",
-    "Biển bị chói sáng",
-    "Biển giả mạo (che 1 vài số, dán biển khác lên...)",
-    "Biển biến dạng vật lý (cong, vênh)",
-    "Biển bóng của vật thể che khuất",
-    "Xe không biển",
+    "Rõ",
+    "Khó đọc",
+    "Không đọc được",
 )
 
 # The rear-camera plate crops are tiny (≈117px wide on average), which a vision model reads and
@@ -71,18 +66,9 @@ def _upscale_for_ai(image_bytes: bytes) -> bytes:
 # Clear per-label criteria so the model doesn't confuse look-alike defects — the common mistake
 # is calling an over-bright / washed-out plate "bẩn" (dirty) instead of "chói sáng" (glare).
 _QUALITY_CRITERIA = (
-    "- 'Biển bị chói sáng': có vùng TRẮNG XOÁ / loá do đèn hoặc phản chiếu, ký tự mất nét vì QUÁ"
-    " SÁNG. Đây KHÔNG phải bẩn.\n"
-    "- 'Biển bẩn': có bùn/đất/vết bẩn TỐI MÀU bám lên mặt biển.\n"
-    "- 'Biển cũ, xước, mờ': sơn tróc, trầy xước, phai màu, mờ chung chung"
-    " (không do sáng hay bẩn).\n"
-    "- 'Biển bị che vật lý': có VẬT (tem, tay, dây, đồ) che khuất một phần ký tự.\n"
-    "- 'Biển bị dán (icon, decal, trang trí...)': có hình dán/trang trí đè lên biển.\n"
-    "- 'Biển giả mạo (che 1 vài số, dán biển khác lên...)': cố ý che/sửa số hoặc dán số khác.\n"
-    "- 'Biển biến dạng vật lý (cong, vênh)': biển bị cong / méo / gãy.\n"
-    "- 'Biển bóng của vật thể che khuất': bóng đổ của vật thể phủ lên biển.\n"
-    "- 'Xe không biển': không có biển số.\n"
-    "- 'Biển đẹp bình thường': rõ nét, không khiếm khuyết đáng kể.\n"
+    "- 'Rõ': biển sạch, sắc nét, đọc CHẮC CHẮN được toàn bộ ký tự, không phải cố gắng.\n"
+    "- 'Khó đọc': mờ / bẩn / chói / nghiêng / ở xa nhưng VẪN đọc ra được biển khi nhìn kỹ.\n"
+    "- 'Không đọc được': bị che, mất số, quá mờ/loá — KHÔNG thể đọc chắc chắn biển số.\n"
 )
 _PROMPT = (
     "Bạn là chuyên gia đọc biển số xe máy Việt Nam từ ảnh crop biển.\n"
@@ -94,28 +80,18 @@ _PROMPT = (
     "   • Ngoại giao/nước ngoài/quốc tế: có 'NG' / 'NN' / 'QT' / 'CV' / 'LD' nằm GIỮA hai nhóm số"
     " (vd 41-291-NG-01 → '41291NG01', 80-NN-167-76 → '80NN16776') — giữ nguyên 2 chữ đó.\n"
     "   • Quân đội (biển đỏ): 2-3 CHỮ đầu rồi tới số (vd KA-1234, ABS-12-34) — không có số tỉnh.\n"
-    "2) Phân loại chất lượng: chọn ĐÚNG MỘT nhãn ứng với KHIẾM KHUYẾT NỔI BẬT NHẤT,"
-    " theo tiêu chí:\n"
+    "2) Mức độ nhận diện biển: chọn ĐÚNG MỘT trong 3 mức, dựa trên việc ĐỌC ĐƯỢC hay không:\n"
     + _QUALITY_CRITERIA
-    + "quality PHẢI copy Y HỆT một trong các chuỗi nhãn ở trên. "
+    + "quality PHẢI copy Y HỆT một trong 3 chuỗi: 'Rõ', 'Khó đọc', 'Không đọc được'. "
     "Trả về JSON thuần: {\"plate\": \"...\", \"quality\": \"...\", \"confidence\": 0..1}."
 )
 
 
-# Coarse groups so the local signal (which can only judge broadly) and the LLM (which names a
-# fine category) are compared fairly: "che vật lý" and "dán decal" both fall under occlusion, so
-# they should count as agreement, not a spurious conflict.
+# With only 3 levels each maps to its own group — consensus is now a direct level match.
 _QUALITY_GROUP = {
-    "Biển đẹp bình thường": "ok",
-    "Biển bẩn": "degrade",
-    "Biển cũ, xước, mờ": "degrade",
-    "Biển bị che vật lý": "occlusion",
-    "Biển bị dán (icon, decal, trang trí...)": "occlusion",
-    "Biển giả mạo (che 1 vài số, dán biển khác lên...)": "occlusion",
-    "Biển bóng của vật thể che khuất": "occlusion",
-    "Biển bị chói sáng": "glare",
-    "Biển biến dạng vật lý (cong, vênh)": "deform",
-    "Xe không biển": "no_plate",
+    "Rõ": "ok",
+    "Khó đọc": "hard",
+    "Không đọc được": "unreadable",
 }
 
 
@@ -137,9 +113,9 @@ def local_quality_groups(
         return {"no_plate"}
     groups: set[str] = set()
     if "WEAK_CHARACTER" in quality_flags:
-        groups |= {"occlusion", "glare"}  # an uncertain character is usually cover or glare
+        groups |= {"hard", "unreadable"}  # an uncertain character means hard-to-read at best
     if quality_score is not None and quality_score < 0.5:
-        groups |= {"degrade", "glare"}  # a poor crop is blur / dirt / glare
+        groups |= {"hard"}  # a poor crop is at least "khó đọc"
     return groups or {"ok"}
 
 

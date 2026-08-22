@@ -27,6 +27,7 @@ from app.export.plate_report import (
     _PX_TO_PT,
     _QUALITY_LIST_SHEET,
     _QUALITY_OPTIONS,
+    _RECOGNITION_OPTIONS,
     _ROW_PAD_PT,
     MISSING_IMAGE_TEXT,
     _scaled_image,
@@ -44,6 +45,7 @@ _COLUMNS: tuple[tuple[str, int], ...] = (
     ("Ảnh cam toàn cảnh", 70),
     ("Ảnh biển số", 36),
     ("License Plate expected", 22),
+    ("Mức độ nhận diện", 16),
     ("Phân loại biển số", 22),
     ("Biển số model trả về", 22),
     ("Ảnh biển số model trả về", 22),
@@ -126,8 +128,12 @@ def build_gt_final_workbook(rows: list[GtFinalRow]) -> Workbook:
     result_validation = DataValidation(
         type="list", formula1=f'"{_RESULT_OPTIONS}"', allow_blank=True
     )
+    recognition_validation = DataValidation(
+        type="list", formula1=f'"{_RECOGNITION_OPTIONS}"', allow_blank=True
+    )
     sheet.add_data_validation(quality_validation)
     sheet.add_data_validation(result_validation)
+    sheet.add_data_validation(recognition_validation)
 
     for position, row in enumerate(rows, start=1):
         excel_row = _HEADER_ROW + position
@@ -135,12 +141,15 @@ def build_gt_final_workbook(rows: list[GtFinalRow]) -> Workbook:
             _COL["No"]: position,
             _COL["From - To"]: f"{format_timestamp(row.start_ms)} - {format_timestamp(row.end_ms)}",
             _COL["License Plate expected"]: row.gt_text,
-            _COL["Phân loại biển số"]: row.quality or quality_prefill(row.classification),
+            _COL["Mức độ nhận diện"]: row.quality or quality_prefill(row.classification),
+            # "Phân loại biển số" (fine defect) left BLANK — the reviewer fills it in Excel.
         }
+        centered = {_COL["No"], _COL["From - To"], _COL["TP/FP/FN/NA"]}
         for column in range(1, len(_COLUMNS) + 1):
             cell = sheet.cell(row=excel_row, column=column, value=values.get(column))
             cell.border = _CELL_BORDER
-            cell.alignment = _CENTER_ALIGN if column in (1, 2, 9) else _CELL_ALIGN
+            cell.alignment = _CENTER_ALIGN if column in centered else _CELL_ALIGN
+        recognition_validation.add(sheet.cell(row=excel_row, column=_COL["Mức độ nhận diện"]))
         quality_validation.add(sheet.cell(row=excel_row, column=_COL["Phân loại biển số"]))
         result_validation.add(sheet.cell(row=excel_row, column=_COL["TP/FP/FN/NA"]))
 

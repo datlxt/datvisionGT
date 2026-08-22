@@ -31,7 +31,8 @@ _COLUMNS: tuple[tuple[str, int], ...] = (
     ("Ảnh crop biển số", 36),
     ("TrackID", 16),
     ("Plate model đọc", 18),
-    ("Phân loại", 16),
+    ("Mức độ nhận diện", 16),
+    ("Phân loại", 22),
     ("GT Plate", 18),
     ("Start", 9),
     ("End", 9),
@@ -44,10 +45,12 @@ _COLUMNS: tuple[tuple[str, int], ...] = (
 PLATE_REPORT_HEADERS: tuple[str, ...] = tuple(header for header, _ in _COLUMNS)
 _COL = {header: index for index, (header, _) in enumerate(_COLUMNS, start=1)}
 
-# Plate-quality taxonomy for the "Phân loại" data-label column. These describe a human
-# judgement (glare/forged/deformed cannot be auto-classified reliably without a dedicated
-# trained classifier), so the column is a dropdown the reviewer fills; only the fully
-# deterministic "Xe không biển" is pre-filled from the model.
+# The 3-level "Mức độ nhận diện" (how readable the plate is) — filled by the AI/reviewer. Short
+# enough for an inline Excel dropdown.
+_RECOGNITION_OPTIONS = "Rõ,Khó đọc,Không đọc được,Xe không biển"
+
+# Fine defect taxonomy for the "Phân loại" column. These are a HUMAN judgement (glare/forged/deformed
+# cannot be auto-classified reliably), so the column is a BLANK dropdown the reviewer fills in Excel.
 _QUALITY_OPTIONS = (
     "Biển đẹp bình thường",
     "Biển bẩn",
@@ -173,6 +176,10 @@ def build_plate_report_workbook(rows: list[PlateReportRow]) -> Workbook:
         showErrorMessage=True,
     )
     sheet.add_data_validation(quality_validation)
+    recognition_validation = DataValidation(
+        type="list", formula1=f'"{_RECOGNITION_OPTIONS}"', allow_blank=True, showErrorMessage=True
+    )
+    sheet.add_data_validation(recognition_validation)
 
     for position, row in enumerate(rows, start=1):
         excel_row = position + 1
@@ -180,7 +187,8 @@ def build_plate_report_workbook(rows: list[PlateReportRow]) -> Workbook:
             _COL["STT"]: position,
             _COL["TrackID"]: row.track_code,
             _COL["Plate model đọc"]: row.plate_text,
-            _COL["Phân loại"]: row.quality or quality_prefill(row.classification),
+            _COL["Mức độ nhận diện"]: row.quality or quality_prefill(row.classification),
+            # "Phân loại" (fine defect) is left BLANK on purpose — the reviewer fills it in Excel.
             _COL["GT Plate"]: row.gt_text,
             _COL["Start"]: format_timestamp(row.start_ms),
             _COL["End"]: format_timestamp(row.end_ms),
@@ -195,6 +203,7 @@ def build_plate_report_workbook(rows: list[PlateReportRow]) -> Workbook:
             cell.border = _CELL_BORDER
             cell.alignment = _CENTER_ALIGN if column in _CENTERED_COLUMNS else _CELL_ALIGN
         qa_validation.add(sheet.cell(row=excel_row, column=_COL["Kết quả QA"]))
+        recognition_validation.add(sheet.cell(row=excel_row, column=_COL["Mức độ nhận diện"]))
         quality_validation.add(sheet.cell(row=excel_row, column=_COL["Phân loại"]))
 
         # Track the tallest embedded image so the row grows to show the full frame in full.

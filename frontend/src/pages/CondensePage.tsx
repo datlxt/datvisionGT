@@ -117,7 +117,7 @@ export function CondensePage({
     if (!selected) return;
     const extension = `.${selected.name.split(".").pop()?.toLowerCase() ?? ""}`;
     if (!acceptedExtensions.includes(extension)) {
-      setMessage({ tone: "error", text: "Định dạng video chưa được backend hỗ trợ." });
+      setMessage({ tone: "error", text: "Định dạng video này chưa được hỗ trợ." });
       return;
     }
     setSelectedFile(selected);

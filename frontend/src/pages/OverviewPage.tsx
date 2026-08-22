@@ -371,8 +371,8 @@ export function OverviewPage({
               </div>
             </div>
             <p className="backend-note">
-              Thống kê record confidence thấp và nghi trùng chưa có endpoint tổng hợp nên không hiển
-              thị tại đây.
+              Thống kê lượt xe có độ tin thấp và nghi trùng chưa được tổng hợp nên chưa hiển thị
+              tại đây.
             </p>
           </aside>
         </div>

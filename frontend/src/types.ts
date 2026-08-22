@@ -116,6 +116,7 @@ export type ResultList = {
       plate_elsewhere_ms?: number | null;
     }[];
   } | null;
+  cloud_ocr_available?: boolean;
 };
 
 export type VerifyStatus = "UNVERIFIED" | "IN_REVIEW" | "VERIFIED" | "DISCARDED";

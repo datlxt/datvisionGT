@@ -167,7 +167,7 @@ export function CreateJobPage({
     if (!selected) return;
     const extension = `.${selected.name.split(".").pop()?.toLowerCase() ?? ""}`;
     if (!acceptedExtensions.includes(extension)) {
-      setMessage({ tone: "error", text: "Định dạng video chưa được backend hỗ trợ." });
+      setMessage({ tone: "error", text: "Định dạng video này chưa được hỗ trợ." });
       return;
     }
     setSelectedFile(selected);
@@ -258,7 +258,7 @@ export function CreateJobPage({
               <span>1</span>
               <div>
                 <h2>Dữ liệu đầu vào</h2>
-                <p>Backend hiện hỗ trợ một video cho mỗi job.</p>
+                <p>Mỗi job xử lý một video.</p>
               </div>
             </header>
 
@@ -270,7 +270,7 @@ export function CreateJobPage({
                 aria-selected="false"
                 disabled
                 role="tab"
-                title="Backend chưa hỗ trợ IMAGE_SET"
+                title="Hiện chưa hỗ trợ tập ảnh"
                 type="button"
               >
                 <Icon name="images" size={18} /> Tập ảnh
@@ -404,7 +404,7 @@ export function CreateJobPage({
               <span>2</span>
               <div>
                 <h2>Phạm vi xử lý</h2>
-                <p>Chỉ bật chức năng backend đang triển khai thực tế.</p>
+                <p>Chỉ bật các chức năng đã triển khai thực tế.</p>
               </div>
             </header>
 
@@ -559,28 +559,28 @@ export function CreateJobPage({
               <span>3</span>
               <div>
                 <h2>Cấu hình xử lý</h2>
-                <p>Giá trị khớp với DTO và cấu hình job đang được backend lưu.</p>
+                <p>Cấu hình đang áp dụng cho job.</p>
               </div>
             </header>
 
             <div className="selection-grid processing-modes" role="listbox">
               <SelectionCard
                 badge="Chưa khả dụng"
-                description="Backend chưa nhận lựa chọn này."
+                description="Ưu tiên bắt tối đa số xe, chấp nhận nhiều cảnh báo hơn."
                 disabled
-                title="High Recall"
+                title="Bắt tối đa"
               />
               <SelectionCard
                 badge="Chế độ chuẩn"
-                description="Cấu hình BALANCED đang chạy ổn định."
+                description="Cân bằng giữa độ chính xác và tốc độ — đang chạy ổn định."
                 selected
-                title="Balanced"
+                title="Cân bằng"
               />
               <SelectionCard
                 badge="Chưa khả dụng"
-                description="Backend chưa nhận lựa chọn này."
+                description="Ưu tiên tốc độ, bỏ bớt bước để chạy nhanh hơn."
                 disabled
-                title="Fast"
+                title="Nhanh"
               />
             </div>
 
@@ -588,11 +588,11 @@ export function CreateJobPage({
               <label>
                 <span>Tần suất lấy mẫu</span>
                 <div>
-                  <input aria-label="Sample rate" readOnly value="4" />
-                  <small>frames / giây</small>
+                  <input aria-label="Tần suất lấy mẫu" readOnly value="4" />
+                  <small>khung hình / giây</small>
                 </div>
               </label>
-              <p>Được lưu vào trường <code>sample_rate</code> của job.</p>
+              <p>Số khung hình được phân tích trên mỗi giây video.</p>
             </div>
 
             <details className="advanced-config">
@@ -601,16 +601,16 @@ export function CreateJobPage({
                 <Icon name="chevron" size={17} />
               </summary>
               <p>
-                Model và ngưỡng nhận diện do worker quản lý. UI hiện không có endpoint để thay đổi
-                các giá trị này.
+                Mô hình và ngưỡng nhận diện do hệ thống xử lý quản lý, hiện không chỉnh trực tiếp
+                trên giao diện.
               </p>
             </details>
           </section>
 
           <section className="card action-footer">
             <p>
-              Tool chỉ sinh kết quả model và evidence. GT Final cần API kiểm duyệt của backend trước
-              khi có thể xuất.
+              Bước này chỉ tạo kết quả model kèm bằng chứng. GT chính thức cần qua bước kiểm duyệt
+              trước khi xuất.
             </p>
             <div>
               <button
@@ -699,8 +699,9 @@ export function CreateJobPage({
           <div className="summary-notice">
             <Icon name="shield" size={20} />
             <p>
-              <strong>No evidence, no record.</strong>
-              Mọi case đều phải có full frame, timestamp, bounding box và crop truy vết được.
+              <strong>Không bằng chứng, không ghi nhận.</strong>
+              Mọi lượt xe đều phải truy xuất được về khung hình gốc, mốc thời gian, vùng khoanh
+              và ảnh crop biển số.
             </p>
           </div>
         </aside>

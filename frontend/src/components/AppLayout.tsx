@@ -9,7 +9,7 @@ const viewLabels: Record<View, string> = {
   create: "Tạo job",
   processing: "Đang xử lý",
   review: "Kiểm duyệt GT",
-  exports: "Kết quả & Export",
+  exports: "Kết quả & Xuất GT",
   condense: "Cắt video",
 };
 
@@ -42,7 +42,7 @@ const navigation: NavItem[] = [
   { view: "create", label: "Tạo job", icon: "plus" },
   { view: "condense", label: "Cắt video", icon: "scissors" },
   { view: "review", label: "Kiểm duyệt GT", icon: "shield" },
-  { view: "exports", label: "Kết quả & Export", icon: "download" },
+  { view: "exports", label: "Kết quả & Xuất GT", icon: "download" },
 ];
 
 export function AppLayout({
@@ -91,21 +91,9 @@ export function AppLayout({
       <div className="workspace">
         <header className="topbar">
           <div className="topbar-breadcrumb">
-            <span>Workspace</span>
+            <span>DatVision GT</span>
             <b>/</b>
             <strong>{viewLabels[view]}</strong>
-          </div>
-          <div className="topbar-actions">
-            <label className="topbar-search" title="Chưa có API tìm kiếm">
-              <Icon name="search" size={18} />
-              <input aria-label="Tìm kiếm" disabled placeholder="Tìm kiếm — chưa hỗ trợ" />
-            </label>
-            <button aria-label="Thông báo — chưa có dữ liệu" disabled title="Chưa có dữ liệu">
-              <Icon name="bell" size={20} />
-            </button>
-            <span className="avatar-placeholder" title="Chưa có dữ liệu người dùng">
-              —
-            </span>
           </div>
         </header>
         <main>{children}</main>

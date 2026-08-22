@@ -209,7 +209,7 @@ code {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 70px;
+  height: 48px;
   padding: 0 28px;
   border-bottom: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.96);
@@ -1032,6 +1032,184 @@ code {
   color: #af4141;
 }
 
+/* Hover-for-explanation marker (ⓘ) next to the AI cross-check line. */
+.crosscheck-help {
+  cursor: help;
+  color: #6b7a90;
+  font-size: 13px;
+  vertical-align: middle;
+}
+
+.crosscheck-help:hover {
+  color: #2b64c4;
+}
+
+/* Collapsible header for the AI cross-check card. */
+.crosscheck-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.cc-chevron {
+  display: inline-flex;
+  color: #7a8aa0;
+  transition: transform 0.15s ease;
+}
+
+.cc-chevron-open {
+  transform: rotate(180deg);
+}
+
+/* Compact collapsibles used to tuck away secondary info in the review panel. */
+.tech-details,
+.note-details {
+  margin-top: 6px;
+}
+
+.tech-details > summary,
+.note-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  list-style: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: #5a6b82;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tech-details > summary::-webkit-details-marker,
+.note-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tech-details > summary:hover,
+.note-details > summary:hover {
+  color: #2b64c4;
+}
+
+.tech-details > summary svg {
+  transition: transform 0.15s ease;
+}
+
+.tech-details[open] > summary svg {
+  transform: rotate(180deg);
+}
+
+/* Hover popup showing a case's crop + technical detail (fixed-positioned to escape the
+   scrollable track list). */
+.track-item-wrap {
+  position: relative;
+}
+
+.track-popup {
+  z-index: 60;
+  width: 300px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(20, 25, 40, 0.18);
+  pointer-events: none;
+  animation: toast-corner-in 0.12s ease-out;
+}
+
+.track-popup-crop {
+  display: block;
+  width: 100%;
+  margin-bottom: 10px;
+  border-radius: 7px;
+  background: #0a1621;
+}
+
+.track-popup-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.track-popup-meta dt {
+  margin-bottom: 2px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.track-popup-meta dd {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Transient corner popup (top-right), auto-dismisses after a few seconds or via the X. */
+.toast-corner {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 1200;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 340px;
+  padding: 13px 15px;
+  border: 1px solid #f3d9a6;
+  background: #fff8ec;
+  color: #8a5a12;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(30, 30, 40, 0.16);
+  font-size: 12px;
+  line-height: 1.45;
+  animation: toast-corner-in 0.18s ease-out;
+}
+
+.toast-corner strong {
+  color: #6b4410;
+}
+
+.toast-corner-success {
+  align-items: center;
+  border-color: #c7e9d6;
+  background: #eef9f3;
+  color: #1f7a4d;
+}
+
+.toast-corner-close {
+  flex: none;
+  margin-left: 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.65;
+  padding: 0;
+  line-height: 1;
+}
+
+.toast-corner-close:hover {
+  opacity: 1;
+}
+
+@keyframes toast-corner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .job-summary {
   position: sticky;
   top: 90px;
@@ -1346,17 +1524,67 @@ code {
 /* One cohesive control panel instead of three separate floating cards. */
 .review-controls {
   max-width: 1500px;
-  margin: 0 auto 12px;
+  margin: 0 auto 8px;
   padding: 0;
   overflow: hidden;
+}
+
+.review-title-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 14px 4px;
+}
+
+.review-title-meta {
+  min-width: 0;
+}
+
+.review-eyebrow {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #2b64c4;
+}
+
+.review-filename {
+  margin: 2px 0 0;
+  max-width: 60vw;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 14px;
+}
+
+.review-status {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
 }
 
 .review-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 0;
 }
 
 /* Plain status line inside the panel — text on white, just a hairline divider, no boxed band. */
@@ -1364,7 +1592,7 @@ code {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 2px 14px 8px;
+  padding: 1px 0;
   color: #15803d;
   font-size: 12.5px;
   font-weight: 600;
@@ -2880,8 +3108,8 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  min-height: 58px;
-  padding: 8px 12px;
+  min-height: 46px;
+  padding: 6px 12px;
 }
 
 .review-toolbar > label {
@@ -3134,6 +3362,7 @@ code {
 .full-frame > img {
   display: block;
   width: 100%;
+  max-height: 46vh;
   aspect-ratio: 16 / 9;
   object-fit: contain;
 }

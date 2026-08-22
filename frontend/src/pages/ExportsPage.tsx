@@ -67,18 +67,17 @@ export function ExportsPage({
     <section className="page exports-page">
       <PageHeader
         description={`${readyCount} job có kết quả model sẵn sàng tải xuống.`}
-        title="Kết quả & Export"
+        title="Kết quả & Xuất GT"
       />
 
       <div className="export-notice card">
         <Icon name="database" size={22} />
         <div>
-          <strong>Hai loại tệp — cần phân biệt rõ:</strong>
+          <strong>Xuất GT ra Excel:</strong>
           <p>
-            🟢 <strong>Plate Report (bản nháp)</strong>: tất cả lượt xe do máy đọc, kèm độ tin và ảnh
-            crop — dùng để <strong>soát / đối chiếu</strong>.{"  "}
-            🔵 <strong>GT Final (bản chốt)</strong>: chỉ các lượt đã <strong>xác nhận</strong>, theo bố
-            cục benchmark, tự tính Precision/Recall — <strong>bộ GT bàn giao</strong> để chấm model khác.
+            Xuất <strong>trạng thái GT hiện tại</strong> của job — tất cả lượt xe kèm biển GT, mức độ
+            nhận diện và ảnh crop đã có tới thời điểm tải. Chưa soát xong vẫn tải được (ảnh chụp hiện
+            trạng), soát tiếp rồi tải lại để cập nhật.
           </p>
         </div>
       </div>
@@ -141,8 +140,7 @@ export function ExportsPage({
                   <th>Tiến độ</th>
                   <th>Trạng thái</th>
                   <th>Cập nhật</th>
-                  <th>Bản nháp — để soát</th>
-                  <th>GT cuối — bàn giao</th>
+                  <th>Xuất GT</th>
                   <th className="th-center">Đánh dấu</th>
                   <th className="th-center">Xóa</th>
                 </tr>
@@ -173,28 +171,9 @@ export function ExportsPage({
                         <a
                           className="button button-primary button-compact export-btn"
                           href={`/api/v1/jobs/${job.id}/export.xlsx`}
-                          title="Bản nháp: MỌI case (trừ đã Loại), GT tạm = biển model đọc. Cùng bố cục với GT Final."
+                          title="Xuất trạng thái GT hiện tại của job (mọi lượt xe, kèm GT + mức độ nhận diện đã điền tới giờ)"
                         >
-                          <Icon name="download" size={16} /> GT (đang làm)
-                        </a>
-                      ) : (
-                        <button
-                          className="button button-secondary button-compact"
-                          disabled
-                          type="button"
-                        >
-                          Chưa sẵn sàng
-                        </button>
-                      )}
-                    </td>
-                    <td>
-                      {isReadyForReview(job) ? (
-                        <a
-                          className="button button-blue button-compact export-btn"
-                          href={`/api/v1/jobs/${job.id}/export/final.xlsx`}
-                          title="Bản chốt: CHỈ case đã VERIFIED — bộ GT chuẩn để bàn giao / chấm model khác"
-                        >
-                          <Icon name="download" size={16} /> GT Final
+                          <Icon name="download" size={16} /> Xuất Excel
                         </a>
                       ) : (
                         <button

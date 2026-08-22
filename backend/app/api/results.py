@@ -74,6 +74,7 @@ class ResultList(BaseModel):
     events: list[EventResult]
     cross_check: dict[str, Any] | None = None  # background AI cross-check status/summary
     missed_scan: dict[str, Any] | None = None  # AI missed-vehicle recall (soát bỏ sót) result
+    cloud_ocr_available: bool = False  # whether the opt-in cloud AI cross-check is configured
 
 
 def _artifact_url(job_id: uuid.UUID, artifact: Artifact) -> str:
@@ -586,6 +587,7 @@ def get_results(job_id: uuid.UUID, session: Annotated[Session, Depends(get_db)])
         events=events,
         cross_check=(job.config_snapshot or {}).get("cross_check"),
         missed_scan=(job.config_snapshot or {}).get("missed_scan"),
+        cloud_ocr_available=get_settings().cloud_ocr_available,
     )
 
 
