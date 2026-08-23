@@ -358,7 +358,7 @@ export function ReviewPage({ job }: { job: Job }) {
   const [saveToast, setSaveToast] = useState<string | null>(null);
   useEffect(() => {
     if (!saveToast) return;
-    const timer = setTimeout(() => setSaveToast(null), 3200);
+    const timer = setTimeout(() => setSaveToast(null), 5000);
     return () => clearTimeout(timer);
   }, [saveToast]);
   const [crossBusy, setCrossBusy] = useState(false);
@@ -481,20 +481,6 @@ export function ReviewPage({ job }: { job: Job }) {
     results?.events.filter(
       (event) => gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED",
     ).length ?? 0;
-
-  // Count auto-verified cases LIVE from the actual data — the stored cross_check.auto_verified is a
-  // one-shot number from when the check last ran (often 0 even though cases are verified). A case is
-  // "tự xác nhận" if its GT is VERIFIED and it carries an automatic-verify signal (readers agreed).
-  const autoVerifiedCount =
-    results?.events.filter((event) => {
-      const rec = gtByTrack.get(event.track_id);
-      if (rec?.verify_status !== "VERIFIED") return false;
-      return (
-        event.quality_flags.includes("OCR_UNANIMOUS") ||
-        event.quality_flags.includes("OCR_AGREE") ||
-        event.quality_flags.includes("AUTO_VERIFIED_REPEATED")
-      );
-    }).length ?? 0;
 
   // "Read result" buckets computed from the events (not the raw backend counts) so a single-frame
   // read the cross-check CONFIRMED counts as "Model ra biển", not "Đọc chưa chắc". Mutually
@@ -782,7 +768,7 @@ export function ReviewPage({ job }: { job: Job }) {
           the "Cần xem lại" tab, which counts more than just reader splits. */}
       <div
         className="crosscheck-inline"
-        title="Đối chiếu chéo: mỗi biển được 3 bộ đọc độc lập — 1 model đọc tại chỗ + 2 AI cloud (AI-1, AI-2). Khớp cả 3 → tự động xác nhận GT; lệch → chuyển cho người soát."
+        title="Mỗi biển được 3 nguồn đọc độc lập: mô hình của hệ thống và 2 AI. Cả 3 khớp thì tự động xác nhận; nếu có nguồn đọc lệch thì đưa vào tab 'Cần xử lý' để người kiểm tra."
       >
         {results.cloud_ocr_available === false &&
         results.cross_check?.status !== "done" &&
@@ -798,19 +784,13 @@ export function ReviewPage({ job }: { job: Job }) {
             <Icon name="clock" size={15} /> Đang đối chiếu AI… <em>(tự động)</em>
           </>
         ) : results.cross_check?.status === "done" ? (
-          // Reported in the SAME (consolidated) numbers as the tabs — 77 auto-verified, and the
-          // live "Cần xử lý" remainder — not the raw per-track crop count, which confused users.
+          // Just the status — the actionable count already lives in the "Cần xử lý" tab below, so
+          // repeating numbers here only confused users (299 vs 300 vs the missed-scan 1).
           <>
             <Icon name="check" size={15} /> AI đối chiếu xong
-            <span className="cc-stat cc-stat-ok">
-              Tự xác nhận <b>{autoVerifiedCount}</b>
-            </span>
-            <span className="cc-stat cc-stat-warn">
-              Cần bạn soát <b>{needCheckCount}</b>
-            </span>
             <span
               className="crosscheck-help"
-              title="Mỗi biển được 3 bộ đọc độc lập (1 model tại chỗ + 2 AI cloud). Khớp cả 3 → AI tự xác nhận, không cần người soát. Lệch → chuyển vào 'Cần bạn soát'. Rê chuột để xem giải thích."
+              title="Mỗi biển được 3 nguồn đọc độc lập: mô hình của hệ thống và 2 AI. Cả 3 khớp thì tự động xác nhận; nếu có nguồn đọc lệch thì đưa vào tab 'Cần xử lý' để người kiểm tra."
             >
               ⓘ
             </span>
@@ -829,19 +809,20 @@ export function ReviewPage({ job }: { job: Job }) {
         <div className="crosscheck-inline">
           {missedScan.status === "pending" || missedScan.status === "running" ? (
             <>
-              <Icon name="clock" size={15} /> AI đang soát xe bị bỏ sót ở các khoảng trống…{" "}
-              <em>(tự động)</em>
+              <Icon name="clock" size={15} /> AI đang rà soát các đoạn trống để tìm phương tiện bị
+              bỏ sót… <em>(tự động)</em>
             </>
           ) : (missedScan.candidates?.length ?? 0) > 0 ? (
             <>
-              <Icon name="alert" size={15} /> AI soát bỏ sót: nghi{" "}
-              <strong>{missedScan.candidates.length}</strong> xe chưa có trong danh sách — xem trên
-              thanh thời gian (tab Video) để bổ sung.
+              <Icon name="alert" size={15} /> AI phát hiện{" "}
+              <strong>{missedScan.candidates.length}</strong> phương tiện nghi bị bỏ sót, chưa có
+              trong danh sách. Kiểm tra trên thanh thời gian (tab Video) để bổ sung.
             </>
           ) : (
             <>
-              <Icon name="check" size={15} /> AI đã soát <strong>{missedScan.gaps ?? 0}</strong>{" "}
-              khoảng trống — không phát hiện xe bị bỏ sót.
+              <Icon name="check" size={15} /> AI đã rà soát{" "}
+              <strong>{missedScan.gaps ?? 0}</strong> đoạn trống, không phát hiện phương tiện bị bỏ
+              sót.
             </>
           )}
         </div>
@@ -920,7 +901,7 @@ export function ReviewPage({ job }: { job: Job }) {
                 <h2>Danh sách lượt xe</h2>
                 <span>{filteredEvents.length}</span>
               </div>
-              <p>Mỗi track là một lượt xe do model tạo.</p>
+              <p>Mỗi dòng là một lượt xe hệ thống phát hiện.</p>
             </header>
             <div className="track-list" ref={trackListRef}>
               {filteredEvents.map((event) => {
@@ -1191,7 +1172,14 @@ export function ReviewPage({ job }: { job: Job }) {
                 </div>
               </div>
             ) : (
-            <div className="full-frame">
+            <div
+              className="full-frame"
+              style={
+                job.width && job.height
+                  ? { aspectRatio: `${job.width} / ${job.height}` }
+                  : undefined
+              }
+            >
               <img alt={`Ảnh toàn cảnh ${selected.track_code}`} src={selected.full_frame_url} />
               <span className="frame-stamp">
                 {formatTime(selected.best_timestamp_ms)} · Frame{" "}
@@ -1492,7 +1480,7 @@ export function ReviewPage({ job }: { job: Job }) {
           />
           <dl className="track-popup-meta">
             <div>
-              <dt>Mã track</dt>
+              <dt>Mã lượt xe</dt>
               <dd>{hoverTrack.event.track_code}</dd>
             </div>
             <div>
@@ -1656,15 +1644,14 @@ function GtPanel({
       )}
       <div className="panel-section-title">
         <div>
-          <span>Ground Truth</span>
-          <h2>Kiểm duyệt của con người</h2>
+          <h2>Kiểm duyệt GT</h2>
         </div>
         <StatusBadge tone={verifyTone(record.verify_status)}>
           {VERIFY_LABEL[record.verify_status]}
         </StatusBadge>
       </div>
       <label>
-        Biển GT
+        Biển số đúng (GT)
         <input
           disabled={isNoPlate}
           onChange={(event) => setGtText(event.target.value.toUpperCase())}
@@ -1708,7 +1695,10 @@ function GtPanel({
         </p>
       ) : null}
       <details className="note-details" open={note.trim().length > 0}>
-        <summary>Ghi chú kiểm duyệt (tuỳ chọn)</summary>
+        <summary>
+          Ghi chú kiểm duyệt (tuỳ chọn)
+          <Icon name="chevron" size={15} />
+        </summary>
         <textarea
           onChange={(event) => setNote(event.target.value)}
           placeholder="Nhập ghi chú nếu cần…"
@@ -1739,15 +1729,15 @@ function GtPanel({
             Loại bỏ
           </button>
         )}
+        <button
+          className="button button-primary gt-verify"
+          disabled={busy || isVerified || (!gtText.trim() && !isNoPlate)}
+          onClick={verify}
+          type="button"
+        >
+          <Icon name="check" size={16} /> {isVerified ? "Đã xác nhận" : "Xác nhận GT"}
+        </button>
       </div>
-      <button
-        className="button button-primary button-block"
-        disabled={busy || isVerified || (!gtText.trim() && !isNoPlate)}
-        onClick={verify}
-        type="button"
-      >
-        <Icon name="check" size={18} /> {isVerified ? "Đã xác nhận" : "Xác nhận GT"}
-      </button>
     </section>
   );
 }

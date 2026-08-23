@@ -157,7 +157,7 @@ export function ExportsPage({
             <table className="data-table export-table">
               <thead>
                 <tr>
-                  <th>Job</th>
+                  <th>Tên dữ liệu</th>
                   <th>Loại xe</th>
                   <th>Tiến độ</th>
                   <th>Trạng thái</th>
@@ -247,16 +247,11 @@ export function ExportsPage({
                     </td>
                   </tr>
                 ))}
-                {Array.from({ length: PER_PAGE - pageJobs.length }).map((_, index) => (
-                  <tr aria-hidden="true" className="spacer-row" key={`sp-${index}`}>
-                    <td colSpan={8} />
-                  </tr>
-                ))}
               </tbody>
             </table>
           </div>
         )}
-        {filtered.length > PER_PAGE && (
+        {filtered.length > 0 && (
           <div className="pagination pagination-end">
             <div className="pagination-controls">
               <button

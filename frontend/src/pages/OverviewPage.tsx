@@ -112,9 +112,8 @@ export function OverviewPage({
     if (page > activePageCount) setPage(activePageCount);
   }, [page, activePageCount]);
 
-  const pagination = (pageCount: number) =>
-    pageCount > 1 ? (
-      <div className="pagination">
+  const pagination = (pageCount: number) => (
+      <div className="pagination pagination-end">
         <div className="pagination-controls">
           <button
             className="pagination-btn"
@@ -141,7 +140,7 @@ export function OverviewPage({
           </button>
         </div>
       </div>
-    ) : null;
+    );
 
   return (
     <section className="page overview-page">
@@ -270,11 +269,6 @@ export function OverviewPage({
                         </td>
                       </tr>
                     ))}
-                    {Array.from({ length: PER_PAGE - pagedCondense.length }).map((_, index) => (
-                      <tr aria-hidden="true" className="spacer-row" key={`sp-${index}`}>
-                        <td colSpan={6} />
-                      </tr>
-                    ))}
                   </tbody>
                 </table>
                 {pagination(condensePageCount)}
@@ -384,11 +378,6 @@ export function OverviewPage({
                             <Icon name="trash" size={17} />
                           </button>
                         </td>
-                      </tr>
-                    ))}
-                    {Array.from({ length: PER_PAGE - pagedJobs.length }).map((_, index) => (
-                      <tr aria-hidden="true" className="spacer-row" key={`sp-${index}`}>
-                        <td colSpan={6} />
                       </tr>
                     ))}
                   </tbody>

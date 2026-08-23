@@ -44,6 +44,9 @@ class StartJobRequest(BaseModel):
     roi: list[float] | None = None
     # Travel direction of the lane; flags tracks moving against it for a human to check.
     lane_direction: str | None = None
+    # Frames analysed per second of video. Clamped server-side so a bad client value can't reach
+    # the extractor (0 / negative would divide-by-zero; huge values would freeze it).
+    sample_rate: float | None = None
 
 
 def _sanitize_roi(roi: list[float] | None) -> list[float] | None:
@@ -388,6 +391,8 @@ def start_job(
             config["lane_direction"] = payload.lane_direction
         job.config_snapshot = config
         flag_modified(job, "config_snapshot")
+        if payload.sample_rate is not None:
+            job.sample_rate = max(1.0, min(12.0, float(payload.sample_rate)))
 
     settings = get_settings()
     queue = Queue(settings.rq_queue, connection=Redis.from_url(settings.redis_url))

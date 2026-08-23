@@ -9,7 +9,7 @@ import {
 
 import { CondensedList } from "../components/CondensedList";
 import { Icon } from "../components/Icon";
-import { PageHeader, StatusBadge } from "../components/ui";
+import { PageHeader } from "../components/ui";
 import { api } from "../lib/api";
 import { formatBytes, formatTime } from "../lib/format";
 import type { CondenseStatus } from "../types";
@@ -31,7 +31,7 @@ export function CondensePage({
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
-  const [minGap, setMinGap] = useState(15);
+  const [minGap, setMinGap] = useState(3);
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -102,7 +102,7 @@ export function CondensePage({
   // Corner toast auto-dismisses after a few seconds (still closable via the X).
   useEffect(() => {
     if (!message) return;
-    const timer = setTimeout(() => setMessage(null), 4000);
+    const timer = setTimeout(() => setMessage(null), 6500);
     return () => clearTimeout(timer);
   }, [message]);
 
@@ -211,7 +211,10 @@ export function CondensePage({
     }
     setStatus(null);
     setCancelling(false);
-    setMessage({ tone: "success", text: "Đã huỷ cắt video. Bạn có thể chỉnh và cắt lại." });
+    setMessage({
+      tone: "success",
+      text: "Đã huỷ cắt video. Bạn có thể chỉnh mức cắt / khoanh làn rồi cắt lại khi cần.",
+    });
   }
 
   const processing = Boolean(status) && !terminal.includes(status!.status);
@@ -226,73 +229,45 @@ export function CondensePage({
       />
 
       <div className="card condense-setup">
-        {/* Step 1 — choose the video (full width, so neither column starts out empty). */}
-        <header className="section-heading">
-          <span>1</span>
-          <div>
-            <h2>Chọn video gốc</h2>
-            <p>Video chưa cắt, còn nhiều khoảng trống không có xe.</p>
-          </div>
-        </header>
-
         {!file ? (
-          <div
-            className={`upload-dropzone ${dragging ? "dragging" : ""}`}
-            onClick={() => inputRef.current?.click()}
-            onDragEnter={(event) => {
-              event.preventDefault();
-              setDragging(true);
-            }}
-            onDragLeave={() => setDragging(false)}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={dropFile}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") inputRef.current?.click();
-            }}
-          >
-            <input accept="video/*,.mkv,.m4v" onChange={chooseFile} ref={inputRef} type="file" />
-            <span className="upload-symbol">
-              <Icon name="upload" size={22} />
-            </span>
-            <strong>Kéo thả video vào đây hoặc nhấn để chọn</strong>
-            <p>MP4, AVI, MOV, MKV, M4V · Tối đa 2 GB</p>
-          </div>
-        ) : (
-          <div className="selected-file">
-            {preview && <video muted preload="metadata" src={preview} />}
-            <div className="selected-file-copy">
-              <strong title={file.name}>{file.name}</strong>
+          /* No video yet — just the picker, full width (nothing to show on a second column). */
+          <>
+            <header className="section-heading">
+              <span>1</span>
               <div>
-                <span>
-                  <Icon name="file" size={15} /> {formatBytes(file.size)}
-                </span>
+                <h2>Chọn video gốc</h2>
               </div>
-              <StatusBadge tone="info">Sẵn sàng cắt</StatusBadge>
-            </div>
-            <button
-              className="button button-secondary button-compact selected-file-swap"
-              disabled={busy || processing}
-              onClick={(event) => {
-                event.stopPropagation();
-                inputRef.current?.click();
+            </header>
+            <div
+              className={`upload-dropzone ${dragging ? "dragging" : ""}`}
+              onClick={() => inputRef.current?.click()}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setDragging(true);
               }}
-              type="button"
+              onDragLeave={() => setDragging(false)}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={dropFile}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") inputRef.current?.click();
+              }}
             >
-              Đổi tệp khác
-            </button>
-            <input accept="video/*,.mkv,.m4v" onChange={chooseFile} ref={inputRef} type="file" />
-          </div>
-        )}
-
-        {/* Step 2 — only once a video is picked: lane ROI (left) + cut level & action (right). */}
-        {file && (
+              <input accept="video/*,.mkv,.m4v" onChange={chooseFile} ref={inputRef} type="file" />
+              <span className="upload-symbol">
+                <Icon name="upload" size={22} />
+              </span>
+              <strong>Kéo thả video vào đây hoặc nhấn để chọn</strong>
+              <p>MP4, AVI, MOV, MKV, M4V · Tối đa 2 GB</p>
+            </div>
+          </>
+        ) : (
+          /* Video picked — two columns: the lane-ROI preview (left) beside the settings (right). */
           <div className="condense-config">
             <section className="condense-roi-col">
               <div className="condense-roi-head">
                 <strong>Khoanh làn (tùy chọn)</strong>
-                <p>Kéo chuột để khoanh làn cần giữ; hệ thống sẽ bỏ qua các làn khác.</p>
               </div>
               <div
                 className="roi-stage"
@@ -334,13 +309,40 @@ export function CondensePage({
 
             <section className="condense-cut-col">
               <header className="section-heading">
+                <span>1</span>
+                <div>
+                  <h2>Chọn video gốc</h2>
+                </div>
+              </header>
+              <div className="selected-file">
+                <div className="selected-file-copy">
+                  <strong title={file.name}>{file.name}</strong>
+                  <div>
+                    <span>
+                      <Icon name="file" size={15} /> {formatBytes(file.size)}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  className="button button-secondary button-compact selected-file-swap"
+                  disabled={busy || processing}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    inputRef.current?.click();
+                  }}
+                  type="button"
+                >
+                  Đổi tệp khác
+                </button>
+                <input accept="video/*,.mkv,.m4v" onChange={chooseFile} ref={inputRef} type="file" />
+              </div>
+
+              <header className="section-heading">
                 <span>2</span>
                 <div>
                   <h2>Mức cắt</h2>
-                  <p>Chỉ cắt các khoảng trống dài hơn ngưỡng; đoạn xe dừng ngắn hơn được giữ nguyên.</p>
                 </div>
               </header>
-
               <div className="condense-gap">
                 <label htmlFor="min-gap">
                   Bỏ khoảng trống dài hơn <strong>{minGap} giây</strong>
@@ -360,8 +362,7 @@ export function CondensePage({
                   <span>60s</span>
                 </div>
                 <small>
-                  Với video thực tế (xe cách nhau 1–2 phút), nên đặt khoảng 15–20 giây. Đoạn xe dừng
-                  ngắn hơn ngưỡng vẫn được giữ nguyên.
+                  Với video thực tế (xe cách nhau 1–2 phút), nên đặt khoảng 15–20 giây.
                 </small>
               </div>
 
@@ -394,11 +395,6 @@ export function CondensePage({
               <small>{stageLabels[status!.status] ?? "Đang xử lý…"}</small>
             </div>
             <b className="condense-progress-pct">{progressPercent}%</b>
-          </div>
-          <div className="condense-progress-track">
-            <span style={{ width: `${Math.max(progressPercent, 4)}%` }} />
-          </div>
-          <div className="condense-progress-foot">
             <button
               className="button button-secondary button-compact"
               disabled={cancelling}
@@ -407,6 +403,9 @@ export function CondensePage({
             >
               <Icon name="x" size={16} /> {cancelling ? "Đang huỷ…" : "Huỷ cắt"}
             </button>
+          </div>
+          <div className="condense-progress-track">
+            <span style={{ width: `${Math.max(progressPercent, 4)}%` }} />
           </div>
         </div>
       )}
@@ -468,7 +467,7 @@ export function CondensePage({
               className="button button-secondary"
               href={`/api/v1/condense/${status!.id}/download`}
             >
-              <Icon name="download" size={18} /> Tải video về
+              <Icon name="download" size={18} /> Tải video
             </a>
             <button
               className="button button-primary"

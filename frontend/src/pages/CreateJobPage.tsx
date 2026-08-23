@@ -38,6 +38,9 @@ export function CreateJobPage({
   const roiVideoRef = useRef<HTMLVideoElement>(null);
   const [roi, setRoi] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [laneDirection, setLaneDirection] = useState<"" | "up" | "down" | "left" | "right">("");
+  // Frames analysed per second of video. Editable (1–12), default 2 (the long-stable value the
+  // pipeline actually runs). Clamped so a bad value can't reach the extractor (0 / negative / huge).
+  const [sampleRate, setSampleRate] = useState(2);
   // Video source origin: a fresh upload from disk, or one of the user's already-condensed videos.
   const [sourceMode, setSourceMode] = useState<"new" | "condensed">("new");
   const [condensedPick, setCondensedPick] = useState<CondenseStatus | null>(null);
@@ -198,6 +201,7 @@ export function CreateJobPage({
         body: JSON.stringify({
           roi: roi ? [roi.x1, roi.y1, roi.x2, roi.y2] : null,
           lane_direction: laneDirection || null,
+          sample_rate: sampleRate,
         }),
       });
       onStarted(queued);
@@ -494,23 +498,24 @@ export function CreateJobPage({
               <label>
                 <span>Tần suất lấy mẫu</span>
                 <div>
-                  <input aria-label="Tần suất lấy mẫu" readOnly value="4" />
+                  <input
+                    aria-label="Tần suất lấy mẫu"
+                    max={12}
+                    min={1}
+                    onBlur={(event) => {
+                      // Snap an out-of-range / empty entry back into [1, 12] when focus leaves.
+                      const value = Math.round(Number(event.target.value));
+                      setSampleRate(Number.isFinite(value) ? Math.max(1, Math.min(12, value)) : 2);
+                    }}
+                    onChange={(event) => setSampleRate(Number(event.target.value))}
+                    step={1}
+                    type="number"
+                    value={sampleRate}
+                  />
                   <small>khung hình / giây</small>
                 </div>
               </label>
-              <p>Số khung hình được phân tích trên mỗi giây video.</p>
             </div>
-
-            <details className="advanced-config">
-              <summary>
-                Cấu hình nâng cao
-                <Icon name="chevron" size={17} />
-              </summary>
-              <p>
-                Mô hình và ngưỡng nhận diện do hệ thống xử lý quản lý, hiện không chỉnh trực tiếp
-                trên giao diện.
-              </p>
-            </details>
           </section>
 
           <section className="card action-footer">
@@ -592,7 +597,7 @@ export function CreateJobPage({
               <dt>
                 <Icon name="clock" size={18} /> Tần suất lấy mẫu
               </dt>
-              <dd>4 khung/giây</dd>
+              <dd>{sampleRate} khung/giây</dd>
             </div>
           </dl>
 

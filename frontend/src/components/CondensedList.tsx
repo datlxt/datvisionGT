@@ -45,7 +45,7 @@ export function CondensedList({
   const [openId, setOpenId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<CondenseStatus | null>(null);
   const [page, setPage] = useState(1);
-  const PER_PAGE = 6;
+  const PER_PAGE = 4;
 
   useEffect(() => {
     let active = true;
@@ -138,39 +138,33 @@ export function CondensedList({
         ))}
       </ul>
 
-      {items.length > PER_PAGE && (
-        <div className="pagination">
-          <span className="pagination-info">
-            {(page - 1) * PER_PAGE + 1}–{Math.min(page * PER_PAGE, items.length)} / {items.length}{" "}
-            video
-          </span>
-          <div className="pagination-controls">
-            <button
-              className="pagination-btn"
-              disabled={page <= 1}
-              onClick={() => setPage((value) => Math.max(1, value - 1))}
-              type="button"
-            >
-              <span className="pagination-flip">
-                <Icon name="arrow" size={15} />
-              </span>
-              Trước
-            </button>
-            <span className="pagination-page">
-              Trang {page} / {totalPages}
-            </span>
-            <button
-              className="pagination-btn"
-              disabled={page >= totalPages}
-              onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
-              type="button"
-            >
-              Sau
+      <div className="pagination pagination-end">
+        <div className="pagination-controls">
+          <button
+            className="pagination-btn"
+            disabled={page <= 1}
+            onClick={() => setPage((value) => Math.max(1, value - 1))}
+            type="button"
+          >
+            <span className="pagination-flip">
               <Icon name="arrow" size={15} />
-            </button>
-          </div>
+            </span>
+            Trước
+          </button>
+          <span className="pagination-page">
+            Trang {page} / {totalPages}
+          </span>
+          <button
+            className="pagination-btn"
+            disabled={page >= totalPages}
+            onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+            type="button"
+          >
+            Sau
+            <Icon name="arrow" size={15} />
+          </button>
         </div>
-      )}
+      </div>
 
       {open && (
         <div className="modal-overlay" onClick={() => setOpenId(null)} role="presentation">
@@ -234,7 +228,7 @@ export function CondensedList({
                 </button>
               )}
               <a className="button button-secondary" href={`/api/v1/condense/${open.id}/download`}>
-                <Icon name="download" size={18} /> Tải video về
+                <Icon name="download" size={18} /> Tải video
               </a>
               <button
                 className="button button-danger"

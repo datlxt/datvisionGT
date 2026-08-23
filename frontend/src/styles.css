@@ -608,8 +608,8 @@ code {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 178px;
-  padding: 28px;
+  min-height: 88px;
+  padding: 12px;
   border: 1.5px dashed #9dbbd0;
   border-radius: 12px;
   background: #f9fcff;
@@ -633,9 +633,9 @@ code {
 .upload-symbol {
   display: grid;
   place-items: center;
-  width: 50px;
-  height: 50px;
-  margin-bottom: 12px;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 8px;
   border-radius: 50%;
   background: var(--blue-light);
   color: var(--blue);
@@ -652,43 +652,36 @@ code {
 }
 
 .selected-file {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 15px;
-  margin-top: 15px;
-  padding: 10px;
+  gap: 14px;
+  padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: 11px;
 }
 
-.selected-file video {
-  width: 150px;
-  height: 84px;
-  border-radius: 8px;
-  background: #0e1b26;
-  object-fit: cover;
-}
-
 .selected-file-copy {
-  display: grid;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
   min-width: 0;
-  gap: 8px;
 }
 
 .selected-file-copy > strong {
+  min-width: 0;
   overflow: hidden;
-  font-size: 12px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .selected-file-copy > div {
   display: flex;
-  flex-wrap: wrap;
+  flex: none;
   gap: 6px 13px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .selected-file-copy > div span {
@@ -1105,6 +1098,7 @@ code {
 .note-details > summary {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 6px;
   padding: 4px 0;
   list-style: none;
@@ -1125,11 +1119,13 @@ code {
   color: #2b64c4;
 }
 
-.tech-details > summary svg {
+.tech-details > summary svg,
+.note-details > summary svg {
   transition: transform 0.15s ease;
 }
 
-.tech-details[open] > summary svg {
+.tech-details[open] > summary svg,
+.note-details[open] > summary svg {
   transform: rotate(180deg);
 }
 
@@ -1479,6 +1475,7 @@ code {
 .overview-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
+  align-items: start;
   gap: 20px;
   max-width: 1360px;
   margin: 0 auto;
@@ -1673,8 +1670,20 @@ code {
 
 .gt-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
+}
+
+.gt-actions .button {
+  flex: 0 0 auto;
+  padding: 9px 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.gt-verify {
+  flex: 1 1 auto;
+  justify-content: center;
 }
 
 /* One cohesive control panel instead of three separate floating cards. */
@@ -1812,8 +1821,10 @@ code {
 }
 
 .evidence-video video {
+  display: block;
   width: 100%;
-  max-height: 420px;
+  max-height: 340px;
+  margin: 0 auto;
   border-radius: 10px;
   background: #000000;
 }
@@ -3364,7 +3375,7 @@ code {
 
 .review-grid {
   display: grid;
-  grid-template-columns: 230px minmax(410px, 1fr) 300px;
+  grid-template-columns: 220px minmax(0, 1fr) 380px;
   align-items: stretch;
   gap: 12px;
   max-width: 1500px;
@@ -3528,7 +3539,11 @@ code {
 .full-frame {
   position: relative;
   overflow: hidden;
-  margin-top: 10px;
+  /* Fallback ratio; the real frame ratio is set inline from job.width/height so the box matches the
+     image exactly — no letterbox black bars, and the bbox overlays stay aligned. */
+  aspect-ratio: 16 / 9;
+  max-height: 340px;
+  margin: 10px auto 0;
   border-radius: 9px;
   background: #0a1621;
 }
@@ -3536,9 +3551,8 @@ code {
 .full-frame > img {
   display: block;
   width: 100%;
-  max-height: 46vh;
-  aspect-ratio: 16 / 9;
-  object-fit: contain;
+  height: 100%;
+  object-fit: cover;
 }
 
 .frame-stamp {
@@ -4403,8 +4417,8 @@ button.selection-card:hover:not(.selected) {
 .condense-setup {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 22px 24px 24px;
+  gap: 10px;
+  padding: 14px 20px;
 }
 
 .condense-setup > .section-heading {
@@ -4415,9 +4429,8 @@ button.selection-card:hover:not(.selected) {
    centred so they sit BESIDE the video instead of leaving one column empty). */
 .condense-config {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr);
-  padding-top: 18px;
-  border-top: 1px solid var(--border);
+  grid-template-columns: minmax(0, 600px) minmax(320px, 1fr);
+  gap: 36px;
 }
 
 .condense-roi-col {
@@ -4425,16 +4438,15 @@ button.selection-card:hover:not(.selected) {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  padding-right: 22px;
 }
 
 .condense-cut-col {
   display: flex;
   flex-direction: column;
-  justify-content: center; /* centre the controls vertically against the taller ROI video */
-  gap: 14px;
+  justify-content: center;
+  gap: 12px;
   min-width: 0;
-  padding-left: 22px;
+  padding-left: 30px;
   border-left: 1px solid var(--border);
 }
 
@@ -4524,7 +4536,7 @@ button.selection-card:hover:not(.selected) {
 .condense-roi-foot {
   display: flex;
   align-items: center;
-  min-height: 30px;
+  min-height: 40px;
   color: var(--muted);
   font-size: 11px;
 }
@@ -4533,7 +4545,7 @@ button.selection-card:hover:not(.selected) {
 /* Processing card: give it real padding (a bare .card has none) so the header and bar aren't
    glued to the edges, matching the other framed panels. */
 .condense-progress-card {
-  padding: 20px 24px 22px;
+  padding: 14px 20px;
 }
 
 /* Cancel button under the progress bar while a cut runs. */
@@ -4547,7 +4559,7 @@ button.selection-card:hover:not(.selected) {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .condense-spinner {
@@ -4567,6 +4579,7 @@ button.selection-card:hover:not(.selected) {
 
 .condense-progress-copy {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
@@ -4735,7 +4748,11 @@ button.selection-card:hover:not(.selected) {
 /* List of already-condensed videos (Cắt video page + create-job picker). */
 .condense-library {
   max-width: 1360px;
-  padding: 22px 24px 24px;
+  padding: 14px 20px;
+}
+
+.condense-page .page-header {
+  margin-bottom: 8px;
 }
 
 .condensed-list {
@@ -4751,6 +4768,12 @@ button.selection-card:hover:not(.selected) {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 50px;
+}
+
+/* Invisible filler so a short last page keeps the list height constant (pager doesn't jump). */
+.condensed-row-spacer {
+  min-height: 50px;
 }
 
 .condensed-row-main {
@@ -4759,7 +4782,7 @@ button.selection-card:hover:not(.selected) {
   align-items: center;
   gap: 12px;
   min-width: 0;
-  padding: 11px 14px;
+  padding: 8px 13px;
   border: 1px solid var(--border);
   border-radius: 11px;
   background: #fff;
