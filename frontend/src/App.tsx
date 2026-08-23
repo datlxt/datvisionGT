@@ -12,8 +12,15 @@ import { ProcessingPage } from "./pages/ProcessingPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import type { CondenseStatus, Health, Job, View } from "./types";
 
+const KNOWN_VIEWS = ["overview", "create", "processing", "review", "exports", "condense"];
+
 export default function App() {
-  const [view, setView] = useState<View>("create");
+  // Persist the current screen + selected job so a reload / navigation lands back where you were
+  // (an in-progress cut or processing screen is restored, not reset to "Tạo job").
+  const [view, setView] = useState<View>(() => {
+    const stored = localStorage.getItem("dvgt.view");
+    return stored && KNOWN_VIEWS.includes(stored) ? (stored as View) : "create";
+  });
   const [createVehicleType, setCreateVehicleType] = useState<"motorcycle" | "car">("motorcycle");
   // A condensed video the user chose to turn into GT — pre-selected in the Create Job import flow
   // (so they draw the ROI / set the lane there) instead of jumping straight to processing.
@@ -31,6 +38,9 @@ export default function App() {
         setJobs(payload);
         setSelectedJob((current) => {
           if (current) return payload.find((job) => job.id === current.id) ?? payload[0] ?? null;
+          // Restore the job the user was on before the reload, if it still exists.
+          const storedId = localStorage.getItem("dvgt.jobId");
+          if (storedId) return payload.find((job) => job.id === storedId) ?? payload[0] ?? null;
           return payload[0] ?? null;
         });
       })
@@ -43,6 +53,21 @@ export default function App() {
   useEffect(() => {
     api<Health>("/api/v1/health").then(setHealth).catch(() => setHealth(null));
   }, []);
+
+  // Remember where the user is so a reload restores it.
+  useEffect(() => {
+    localStorage.setItem("dvgt.view", view);
+  }, [view]);
+  useEffect(() => {
+    if (selectedJob) localStorage.setItem("dvgt.jobId", selectedJob.id);
+  }, [selectedJob]);
+  // If a restored "processing"/"review" view has no job (e.g. it was deleted), fall back to overview
+  // once the job list has loaded — never leave the user on a dead screen.
+  useEffect(() => {
+    if (!loadingJobs && (view === "processing" || view === "review") && !selectedJob) {
+      setView("overview");
+    }
+  }, [loadingJobs, view, selectedJob]);
 
   const upsertJob = useCallback((updated: Job) => {
     setSelectedJob(updated);
@@ -97,7 +122,14 @@ export default function App() {
   }
 
   let content;
-  if (view === "overview") {
+  if ((view === "processing" || view === "review") && loadingJobs) {
+    // Restoring a job-bound screen after reload — wait for the job list before deciding.
+    content = (
+      <section className="page">
+        <LoadingState label="Đang tải job…" />
+      </section>
+    );
+  } else if (view === "overview") {
     if (loadingJobs) {
       content = (
         <section className="page">
@@ -127,6 +159,7 @@ export default function App() {
           }}
           onDelete={deleteJob}
           onOpen={openJob}
+          onOpenCondense={() => setView("condense")}
         />
       );
     }

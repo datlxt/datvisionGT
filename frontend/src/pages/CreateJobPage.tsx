@@ -2,7 +2,6 @@ import {
   type ChangeEvent,
   type DragEvent,
   type PointerEvent,
-  type ReactNode,
   useEffect,
   useRef,
   useState,
@@ -16,38 +15,6 @@ import { formatBytes, formatTime } from "../lib/format";
 import type { CondenseStatus, Job } from "../types";
 
 const acceptedExtensions = [".mp4", ".mov", ".avi", ".mkv", ".m4v"];
-
-function SelectionCard({
-  icon,
-  title,
-  description,
-  selected = false,
-  disabled = false,
-  badge,
-}: {
-  icon?: ReactNode;
-  title: string;
-  description: string;
-  selected?: boolean;
-  disabled?: boolean;
-  badge?: string;
-}) {
-  return (
-    <div
-      aria-disabled={disabled}
-      aria-selected={selected}
-      className={`selection-card ${selected ? "selected" : ""} ${disabled ? "disabled" : ""}`}
-      role="option"
-    >
-      <div className="selection-card-top">
-        {icon}
-        {badge && <span>{badge}</span>}
-      </div>
-      <strong>{title}</strong>
-      <p>{description}</p>
-    </div>
-  );
-}
 
 export function CreateJobPage({
   initialCondensed = null,
@@ -247,7 +214,7 @@ export function CreateJobPage({
   return (
     <section className="page create-page">
       <PageHeader
-        description="Đưa video xe máy qua trạm vào pipeline Ground Truth có thể truy vết."
+        description="Tải video lên để nhận diện phương tiện, biển số và tạo dữ liệu Ground Truth có thể truy vết."
         title="Tạo job xử lý mới"
       />
 
@@ -258,25 +225,9 @@ export function CreateJobPage({
               <span>1</span>
               <div>
                 <h2>Dữ liệu đầu vào</h2>
-                <p>Mỗi job xử lý một video.</p>
+                <p>Hiện hệ thống xử lý một video cho mỗi job.</p>
               </div>
             </header>
-
-            <div className="source-tabs" role="tablist">
-              <button aria-selected="true" className="active" role="tab" type="button">
-                <Icon name="video" size={18} /> Video
-              </button>
-              <button
-                aria-selected="false"
-                disabled
-                role="tab"
-                title="Hiện chưa hỗ trợ tập ảnh"
-                type="button"
-              >
-                <Icon name="images" size={18} /> Tập ảnh
-                <small>Chưa hỗ trợ</small>
-              </button>
-            </div>
 
             <div className="source-origin" role="tablist">
               <button
@@ -404,33 +355,9 @@ export function CreateJobPage({
               <span>2</span>
               <div>
                 <h2>Phạm vi xử lý</h2>
-                <p>Chỉ bật các chức năng đã triển khai thực tế.</p>
+                <p>Hiện hệ thống nhận diện biển số: phát hiện xe, đọc biển và OCR nhiều khung hình.</p>
               </div>
             </header>
-
-            <div className="selection-grid scope-grid" role="listbox">
-              <SelectionCard
-                badge="Đang sử dụng"
-                description="Phát hiện xe, biển số và OCR nhiều frame."
-                icon={<Icon name="plate" size={24} />}
-                selected
-                title="Biển số"
-              />
-              <SelectionCard
-                badge="Chưa triển khai"
-                description="Không hoạt động trong MVP hiện tại."
-                disabled
-                icon={<Icon name="face" size={24} />}
-                title="Khuôn mặt"
-              />
-              <SelectionCard
-                badge="Chưa triển khai"
-                description="Không thể chạy hai pipeline cùng lúc."
-                disabled
-                icon={<Icon name="layers" size={24} />}
-                title="Khuôn mặt và biển số"
-              />
-            </div>
 
             <div className="vehicle-type-block">
               <h3>Loại phương tiện</h3>
@@ -559,30 +486,9 @@ export function CreateJobPage({
               <span>3</span>
               <div>
                 <h2>Cấu hình xử lý</h2>
-                <p>Cấu hình đang áp dụng cho job.</p>
+                <p>Hiện hệ thống chạy chế độ cân bằng giữa độ chính xác và tốc độ.</p>
               </div>
             </header>
-
-            <div className="selection-grid processing-modes" role="listbox">
-              <SelectionCard
-                badge="Chưa khả dụng"
-                description="Ưu tiên bắt tối đa số xe, chấp nhận nhiều cảnh báo hơn."
-                disabled
-                title="Bắt tối đa"
-              />
-              <SelectionCard
-                badge="Chế độ chuẩn"
-                description="Cân bằng giữa độ chính xác và tốc độ — đang chạy ổn định."
-                selected
-                title="Cân bằng"
-              />
-              <SelectionCard
-                badge="Chưa khả dụng"
-                description="Ưu tiên tốc độ, bỏ bớt bước để chạy nhanh hơn."
-                disabled
-                title="Nhanh"
-              />
-            </div>
 
             <div className="sample-rate-row">
               <label>
@@ -656,12 +562,6 @@ export function CreateJobPage({
             </div>
             <div>
               <dt>
-                <Icon name="camera" size={18} /> Camera
-              </dt>
-              <dd>Camera sau · trạm vé</dd>
-            </div>
-            <div>
-              <dt>
                 <Icon name="plate" size={18} /> Loại xử lý
               </dt>
               <dd>Biển số · {vehicleType === "car" ? "Ô tô con" : "Xe máy"}</dd>
@@ -685,14 +585,14 @@ export function CreateJobPage({
                 <Icon name="layers" size={18} /> Chế độ
               </dt>
               <dd>
-                <StatusBadge tone="success">Balanced · Chuẩn</StatusBadge>
+                <StatusBadge tone="success">Cân bằng · Chuẩn</StatusBadge>
               </dd>
             </div>
             <div>
               <dt>
-                <Icon name="clock" size={18} /> Sample rate
+                <Icon name="clock" size={18} /> Tần suất lấy mẫu
               </dt>
-              <dd>4 FPS</dd>
+              <dd>4 khung/giây</dd>
             </div>
           </dl>
 

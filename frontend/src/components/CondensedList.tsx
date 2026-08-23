@@ -44,6 +44,8 @@ export function CondensedList({
   const [reload, setReload] = useState(0);
   const [openId, setOpenId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<CondenseStatus | null>(null);
+  const [page, setPage] = useState(1);
+  const PER_PAGE = 6;
 
   useEffect(() => {
     let active = true;
@@ -60,6 +62,12 @@ export function CondensedList({
   }, [reload, reloadKey]);
 
   const open = items?.find((entry) => entry.id === openId) ?? null;
+  const totalPages = Math.max(1, Math.ceil((items?.length ?? 0) / PER_PAGE));
+  // Keep the page valid when the list shrinks (delete) or refetches.
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+  const pageItems = items?.slice((page - 1) * PER_PAGE, page * PER_PAGE) ?? [];
 
   function remove(item: CondenseStatus) {
     // Optimistic: drop the row from the list immediately so it disappears the instant you confirm,
@@ -95,7 +103,7 @@ export function CondensedList({
   return (
     <>
       <ul className="condensed-list">
-        {items.map((item) => (
+        {pageItems.map((item) => (
           <li className="condensed-row" key={item.id}>
             <button
               className="condensed-row-main"
@@ -129,6 +137,40 @@ export function CondensedList({
           </li>
         ))}
       </ul>
+
+      {items.length > PER_PAGE && (
+        <div className="pagination">
+          <span className="pagination-info">
+            {(page - 1) * PER_PAGE + 1}–{Math.min(page * PER_PAGE, items.length)} / {items.length}{" "}
+            video
+          </span>
+          <div className="pagination-controls">
+            <button
+              className="pagination-btn"
+              disabled={page <= 1}
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
+              type="button"
+            >
+              <span className="pagination-flip">
+                <Icon name="arrow" size={15} />
+              </span>
+              Trước
+            </button>
+            <span className="pagination-page">
+              Trang {page} / {totalPages}
+            </span>
+            <button
+              className="pagination-btn"
+              disabled={page >= totalPages}
+              onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+              type="button"
+            >
+              Sau
+              <Icon name="arrow" size={15} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {open && (
         <div className="modal-overlay" onClick={() => setOpenId(null)} role="presentation">

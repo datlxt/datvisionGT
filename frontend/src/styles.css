@@ -1044,6 +1044,34 @@ code {
   color: #2b64c4;
 }
 
+/* Two clearly separated count pills on the "AI đối chiếu xong" line. */
+.cc-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cc-stat b {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.cc-stat-ok {
+  border: 1px solid #c7e9d6;
+  background: #e8f6ee;
+  color: #1f7a4d;
+}
+
+.cc-stat-warn {
+  border: 1px solid #f5d9a8;
+  background: #fff4e5;
+  color: #b45309;
+}
+
 /* Collapsible header for the AI cross-check card. */
 .crosscheck-head {
   display: flex;
@@ -1183,6 +1211,67 @@ code {
   color: #1f7a4d;
 }
 
+.toast-corner-error {
+  align-items: center;
+  border-color: #efcaca;
+  background: #fff1f1;
+  color: #af4141;
+}
+
+/* Floating always-reachable export button (bottom-right), so a reviewer who finishes at the bottom
+   of the page can export without scrolling back up. */
+.export-fab {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 80;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-radius: 999px;
+  font-size: 14px;
+  box-shadow: 0 12px 28px rgba(20, 25, 40, 0.28);
+}
+
+.export-fab:hover {
+  box-shadow: 0 16px 34px rgba(20, 25, 40, 0.34);
+}
+
+/* When every case is handled (Cần xử lý = 0), wiggle periodically to nudge the user to export. */
+.export-fab-ready {
+  animation: fab-wiggle 2.4s ease-in-out infinite;
+}
+
+@keyframes fab-wiggle {
+  0%,
+  82%,
+  100% {
+    transform: translateX(0) rotate(0);
+  }
+  85% {
+    transform: translateX(-3px) rotate(-3deg);
+  }
+  88% {
+    transform: translateX(3px) rotate(3deg);
+  }
+  91% {
+    transform: translateX(-2px) rotate(-2deg);
+  }
+  94% {
+    transform: translateX(2px) rotate(2deg);
+  }
+  97% {
+    transform: translateX(0) rotate(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .export-fab-ready {
+    animation: none;
+  }
+}
+
 .toast-corner-close {
   flex: none;
   margin-left: 2px;
@@ -1297,6 +1386,61 @@ code {
   padding: 22px;
 }
 
+/* Compact the Overview so it fits one screen without scrolling (list rows are paginated). */
+.overview-page .page-header {
+  margin-bottom: 14px;
+}
+
+.overview-page .overview-scope-row {
+  margin-bottom: 12px;
+}
+
+.overview-page .kpi-grid {
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.overview-page .kpi-card {
+  min-height: 66px;
+  padding: 11px 18px;
+}
+
+/* Trim the tall bits so the Overview fits one screen (4 rows/page) without scrolling. */
+.overview-page .page-header h1 {
+  font-size: 22px;
+}
+
+.overview-page .page-header {
+  margin-bottom: 10px;
+}
+
+.overview-page .table-card > header {
+  padding: 11px 18px;
+}
+
+.overview-page .data-table th {
+  height: 32px;
+}
+
+.overview-page .data-table td {
+  height: 44px;
+}
+
+.overview-page .pagination {
+  padding: 10px 18px 12px;
+}
+
+/* Blank filler rows pad a short last page up to a full page, so the pager stays put across pages. */
+.spacer-row td {
+  border-bottom: none;
+}
+
+/* Full-width jobs table (the duplicate "Việc cần xử lý" sidebar was removed). Two-class selector so
+   it wins over the base `.overview-grid` two-column rule regardless of source order. */
+.overview-grid.overview-grid-full {
+  grid-template-columns: 1fr;
+}
+
 .kpi-icon {
   display: grid;
   flex: 0 0 auto;
@@ -1377,6 +1521,18 @@ code {
   gap: 10px;
   padding: 14px 22px 18px;
   border-top: 1px solid var(--border);
+}
+
+.pagination-end {
+  justify-content: flex-end;
+}
+
+/* Keep the status filter group and the vehicle filter group adjacent (not spread apart). */
+.filter-groups {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .pagination-info {
@@ -1877,6 +2033,24 @@ code {
 
 .ct-gap-chip:hover {
   background: #fee2e2;
+}
+
+/* "+N nữa" / "Thu gọn" toggle when there are more gap chips than the visible cap. */
+.ct-gap-more {
+  align-self: center;
+  padding: 3px 11px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ct-gap-more:hover {
+  color: #2b64c4;
+  border-color: #2b64c4;
 }
 
 /* AI-confirmed missed vehicle: stronger (amber) + a thumbnail of the frame the AI saw. */

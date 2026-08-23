@@ -482,6 +482,20 @@ export function ReviewPage({ job }: { job: Job }) {
       (event) => gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED",
     ).length ?? 0;
 
+  // Count auto-verified cases LIVE from the actual data — the stored cross_check.auto_verified is a
+  // one-shot number from when the check last ran (often 0 even though cases are verified). A case is
+  // "tự xác nhận" if its GT is VERIFIED and it carries an automatic-verify signal (readers agreed).
+  const autoVerifiedCount =
+    results?.events.filter((event) => {
+      const rec = gtByTrack.get(event.track_id);
+      if (rec?.verify_status !== "VERIFIED") return false;
+      return (
+        event.quality_flags.includes("OCR_UNANIMOUS") ||
+        event.quality_flags.includes("OCR_AGREE") ||
+        event.quality_flags.includes("AUTO_VERIFIED_REPEATED")
+      );
+    }).length ?? 0;
+
   // "Read result" buckets computed from the events (not the raw backend counts) so a single-frame
   // read the cross-check CONFIRMED counts as "Model ra biển", not "Đọc chưa chắc". Mutually
   // exclusive → the three sum to the total.
@@ -559,7 +573,12 @@ export function ReviewPage({ job }: { job: Job }) {
   const [openGapKey, setOpenGapKey] = useState<number | null>(null);
   const [gapBusy, setGapBusy] = useState(false);
   const [confirmDismissTs, setConfirmDismissTs] = useState<number | null>(null);
+  // Cap the "nghi bỏ sót" chips so a video with many gaps doesn't overflow the panel; the rest is
+  // one click away via "xem thêm".
+  const [gapsExpanded, setGapsExpanded] = useState(false);
+  const GAP_CHIP_LIMIT = 5;
   const openGap = suspectedGaps.find((gap) => gap.start === openGapKey) ?? null;
+  const visibleGaps = gapsExpanded ? suspectedGaps : suspectedGaps.slice(0, GAP_CHIP_LIMIT);
 
   async function dismissGap(tsMs: number) {
     // Remove this gap from the "nghi bỏ sót" timeline (false positive, or already added to GT).
@@ -727,7 +746,7 @@ export function ReviewPage({ job }: { job: Job }) {
   if (!results) {
     return (
       <section className="page">
-        <LoadingState label="Đang tải evidence và kết quả model…" />
+        <LoadingState label="Đang tải bằng chứng và kết quả model…" />
       </section>
     );
   }
@@ -753,9 +772,6 @@ export function ReviewPage({ job }: { job: Job }) {
             {job.source_name}
           </h1>
         </div>
-        <a className="button button-primary" href={`/api/v1/jobs/${job.id}/export.xlsx`}>
-          <Icon name="download" size={18} /> Xuất Excel
-        </a>
       </div>
       {/* Status cluster (left) sits on the SAME row as the action buttons (right) so the empty left
           space of the button row isn't wasted — saves a full row of vertical scroll. */}
@@ -785,10 +801,17 @@ export function ReviewPage({ job }: { job: Job }) {
           // Reported in the SAME (consolidated) numbers as the tabs — 77 auto-verified, and the
           // live "Cần xử lý" remainder — not the raw per-track crop count, which confused users.
           <>
-            <Icon name="check" size={15} /> AI đã đối chiếu xong:{" "}
-            <strong>{results.cross_check.auto_verified ?? 0}</strong> trường hợp 3 nguồn khớp — tự
-            động xác nhận · còn <strong>{needCheckCount}</strong> cần người soát{" "}
-            <span className="crosscheck-help" title="3 nguồn = 1 model đọc tại chỗ + 2 AI cloud (AI-1, AI-2). Rê chuột để xem giải thích.">
+            <Icon name="check" size={15} /> AI đối chiếu xong
+            <span className="cc-stat cc-stat-ok">
+              Tự xác nhận <b>{autoVerifiedCount}</b>
+            </span>
+            <span className="cc-stat cc-stat-warn">
+              Cần bạn soát <b>{needCheckCount}</b>
+            </span>
+            <span
+              className="crosscheck-help"
+              title="Mỗi biển được 3 bộ đọc độc lập (1 model tại chỗ + 2 AI cloud). Khớp cả 3 → AI tự xác nhận, không cần người soát. Lệch → chuyển vào 'Cần bạn soát'. Rê chuột để xem giải thích."
+            >
               ⓘ
             </span>
           </>
@@ -988,7 +1011,7 @@ export function ReviewPage({ job }: { job: Job }) {
                   aria-label="Tua video"
                   aria-valuenow={Math.round(videoMs / 1000)}
                   tabIndex={0}
-                  title="Click bất kỳ đâu để tua video tới đúng vị trí đó"
+                  title="Nhấp vào bất kỳ vị trí nào trên thanh để tua video đến đó"
                 >
                   {results.events.map((event) => {
                     // Two timeline states, matching the simplified tabs: orange = "Cần xử lý" (still
@@ -1052,7 +1075,7 @@ export function ReviewPage({ job }: { job: Job }) {
                         : `Nghi bỏ sót (${suspectedGaps.length})`}
                       :
                     </span>
-                    {suspectedGaps.map((gap) => (
+                    {visibleGaps.map((gap) => (
                       <button
                         className={`ct-gap-chip${gap.confirmed ? " ct-gap-chip-ai" : ""}${
                           openGapKey === gap.start ? " ct-gap-chip-open" : ""
@@ -1077,6 +1100,17 @@ export function ReviewPage({ job }: { job: Job }) {
                         {gap.confirmed ? formatTime(gap.ts) : `${formatTime(gap.start)}–${formatTime(gap.end)}`}
                       </button>
                     ))}
+                    {suspectedGaps.length > GAP_CHIP_LIMIT && (
+                      <button
+                        className="ct-gap-more"
+                        onClick={() => setGapsExpanded((value) => !value)}
+                        type="button"
+                      >
+                        {gapsExpanded
+                          ? "Thu gọn"
+                          : `+${suspectedGaps.length - GAP_CHIP_LIMIT} nữa`}
+                      </button>
+                    )}
                   </div>
                 )}
                 {openGap && openGap.confirmed && (
@@ -1428,6 +1462,22 @@ export function ReviewPage({ job }: { job: Job }) {
           <div>{saveToast}</div>
         </div>
       )}
+
+      {/* Always-reachable export: soát xong ở dưới là bấm ngay, khỏi cuộn lên. Rung nhẹ khi mọi ca
+          đã xử lý xong (Cần xử lý = 0) để nhắc người dùng đã có thể xuất. */}
+      <a
+        className={`button button-primary export-fab${
+          needCheckCount === 0 ? " export-fab-ready" : ""
+        }`}
+        href={`/api/v1/jobs/${job.id}/export.xlsx`}
+        title={
+          needCheckCount === 0
+            ? "Đã soát xong tất cả — xuất GT ra Excel"
+            : "Xuất GT ra Excel (trạng thái hiện tại)"
+        }
+      >
+        <Icon name="download" size={19} /> Xuất Excel
+      </a>
 
       {hoverTrack && (
         <div

@@ -42,6 +42,8 @@ export function CondensePage({
   const roiVideoRef = useRef<HTMLVideoElement>(null);
   const roiDragStart = useRef<{ x: number; y: number } | null>(null);
   const [roi, setRoi] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  // Cut ids the user cancelled — so an in-flight poll / focus re-check can't resurrect the card.
+  const dismissedIds = useRef<Set<string>>(new Set());
 
   useEffect(
     () => () => {
@@ -50,17 +52,59 @@ export function CondensePage({
     [preview],
   );
 
+  // Reconnect to a cut still running on the server (survives reload / leaving the page): on mount —
+  // and whenever the tab/window regains focus — adopt any non-terminal cut so the progress card +
+  // polling resume automatically. Only fills an EMPTY slot, so it never clobbers a fresh selection.
+  useEffect(() => {
+    let active = true;
+    const check = () => {
+      api<CondenseStatus[]>("/api/v1/condense")
+        .then((list) => {
+          if (!active) return;
+          const running = list.find(
+            (item) => !terminal.includes(item.status) && !dismissedIds.current.has(item.id),
+          );
+          if (running) setStatus((current) => current ?? running);
+        })
+        .catch(() => undefined);
+    };
+    check();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") check();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, []);
+
   useEffect(() => {
     if (!status || terminal.includes(status.status)) return;
+    let active = true;
     const timer = setInterval(async () => {
       try {
-        setStatus(await api<CondenseStatus>(`/api/v1/condense/${status.id}`));
+        const next = await api<CondenseStatus>(`/api/v1/condense/${status.id}`);
+        // Don't resurrect a card the user just cancelled (this request may have been in flight).
+        if (active && !dismissedIds.current.has(next.id)) setStatus(next);
       } catch {
         /* keep the last known status; next tick retries */
       }
     }, 1500);
-    return () => clearInterval(timer);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
   }, [status]);
+
+  // Corner toast auto-dismisses after a few seconds (still closable via the X).
+  useEffect(() => {
+    if (!message) return;
+    const timer = setTimeout(() => setMessage(null), 4000);
+    return () => clearTimeout(timer);
+  }, [message]);
 
   // Refresh the "video đã cắt" list the moment a cut finishes so it appears without a page reload.
   useEffect(() => {
@@ -157,6 +201,8 @@ export function CondensePage({
   async function cancelCut() {
     if (!status || cancelling) return;
     setCancelling(true);
+    // Mark it cancelled FIRST so the polling / focus re-check can't bring the card back.
+    dismissedIds.current.add(status.id);
     // DELETE doubles as cancel: it stops the running worker job and removes the partial files.
     try {
       await fetch(`/api/v1/condense/${status.id}`, { method: "DELETE" });
@@ -175,8 +221,8 @@ export function CondensePage({
   return (
     <section className="page condense-page">
       <PageHeader
-        description="Loại bỏ các khoảng thời gian không có xe, dồn các lượt xe thành một video ngắn để đưa vào tạo GT."
-        title="Cắt video – bỏ thời gian chết"
+        description="Loại bỏ các đoạn không có phương tiện và gộp các lượt xe thành một video ngắn để phục vụ tạo GT."
+        title="Cắt video – rút gọn đoạn không có xe"
       />
 
       <div className="card condense-setup">
@@ -342,7 +388,9 @@ export function CondensePage({
               <Icon name="refresh" size={18} />
             </span>
             <div className="condense-progress-copy">
-              <strong>Đang xử lý…</strong>
+              <strong title={status!.source_name ?? undefined}>
+                {status!.source_name ?? "Đang xử lý…"}
+              </strong>
               <small>{stageLabels[status!.status] ?? "Đang xử lý…"}</small>
             </div>
             <b className="condense-progress-pct">{progressPercent}%</b>
@@ -435,9 +483,20 @@ export function CondensePage({
       )}
 
       {message && (
-        <div className={`toast-inline toast-${message.tone}`} role="status">
-          <Icon name={message.tone === "success" ? "check" : "alert"} size={18} />
-          {message.text}
+        <div
+          className={`toast-corner toast-corner-${message.tone === "success" ? "success" : "error"}`}
+          role="status"
+        >
+          <Icon name={message.tone === "success" ? "check" : "alert"} size={16} />
+          <div>{message.text}</div>
+          <button
+            aria-label="Đóng thông báo"
+            className="toast-corner-close"
+            onClick={() => setMessage(null)}
+            type="button"
+          >
+            <Icon name="x" size={14} />
+          </button>
         </div>
       )}
 

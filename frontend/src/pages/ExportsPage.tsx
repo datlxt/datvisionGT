@@ -18,7 +18,7 @@ import { useJobDeletion } from "../lib/useJobDeletion";
 import type { Job } from "../types";
 
 type ExportFilter = "ALL" | "READY" | "PROCESSING" | "FAILED";
-const PER_PAGE = 8;
+const PER_PAGE = 4;
 
 function isFailed(job: Job): boolean {
   return job.status === "FAILED" || job.status === "CANCELLED";
@@ -35,26 +35,38 @@ export function ExportsPage({
   onFlag: (job: Job, flagged: boolean) => Promise<void>;
   onOpen: (job: Job) => void;
 }) {
-  const readyCount = jobs.filter(isReadyForReview).length;
   const deletion = useJobDeletion(onDelete);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ExportFilter>("ALL");
+  const [vehicleFilter, setVehicleFilter] = useState<"all" | "motorcycle" | "car">("all");
   const [page, setPage] = useState(1);
 
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return jobs.filter((job) => {
-      const matchesQuery =
-        !needle ||
-        job.source_name.toLowerCase().includes(needle) ||
-        job.job_code.toLowerCase().includes(needle);
-      if (!matchesQuery) return false;
-      if (filter === "READY") return isReadyForReview(job);
-      if (filter === "FAILED") return isFailed(job);
-      if (filter === "PROCESSING") return !isReadyForReview(job) && !isFailed(job);
-      return true;
-    });
-  }, [jobs, query, filter]);
+  // Shared predicates so the filter-button counts stay CONSISTENT with the cross-filter that's on:
+  // each group counts within what the OTHER group (+ search) already narrowed to.
+  const needle = query.trim().toLowerCase();
+  const okQuery = (job: Job) =>
+    !needle ||
+    job.source_name.toLowerCase().includes(needle) ||
+    job.job_code.toLowerCase().includes(needle);
+  const okStatus = (job: Job, f: ExportFilter) => {
+    if (f === "READY") return isReadyForReview(job);
+    if (f === "FAILED") return isFailed(job);
+    if (f === "PROCESSING") return !isReadyForReview(job) && !isFailed(job);
+    return true;
+  };
+  const okVehicle = (job: Job, v: "all" | "motorcycle" | "car") =>
+    v === "all" || job.vehicle_type === v;
+
+  const filtered = useMemo(
+    () => jobs.filter((job) => okQuery(job) && okStatus(job, filter) && okVehicle(job, vehicleFilter)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [jobs, query, filter, vehicleFilter],
+  );
+  // Status counts respect the vehicle filter; vehicle counts respect the status filter.
+  const statusCount = (f: ExportFilter) =>
+    jobs.filter((job) => okQuery(job) && okVehicle(job, vehicleFilter) && okStatus(job, f)).length;
+  const vehicleCount = (v: "motorcycle" | "car") =>
+    jobs.filter((job) => okQuery(job) && okStatus(job, filter) && okVehicle(job, v)).length;
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
   // Keep the current page valid when the filter/search shrinks the result set.
@@ -66,21 +78,9 @@ export function ExportsPage({
   return (
     <section className="page exports-page">
       <PageHeader
-        description={`${readyCount} job có kết quả model sẵn sàng tải xuống.`}
+        description={`${jobs.filter(isReadyForReview).length} job có kết quả model sẵn sàng tải xuống.`}
         title="Kết quả & Xuất GT"
       />
-
-      <div className="export-notice card">
-        <Icon name="database" size={22} />
-        <div>
-          <strong>Xuất GT ra Excel:</strong>
-          <p>
-            Xuất <strong>trạng thái GT hiện tại</strong> của job — tất cả lượt xe kèm biển GT, mức độ
-            nhận diện và ảnh crop đã có tới thời điểm tải. Chưa soát xong vẫn tải được (ảnh chụp hiện
-            trạng), soát tiếp rồi tải lại để cập nhật.
-          </p>
-        </div>
-      </div>
 
       {jobs.length > 0 && (
         <div className="review-toolbar card">
@@ -92,24 +92,45 @@ export function ExportsPage({
               value={query}
             />
           </label>
-          <div className="filter-tabs">
-            {(
-              [
-                ["ALL", "Tất cả", jobs.length],
-                ["READY", "Sẵn sàng", readyCount],
-                ["PROCESSING", "Đang xử lý", jobs.filter((j) => !isReadyForReview(j) && !isFailed(j)).length],
-                ["FAILED", "Lỗi", jobs.filter(isFailed).length],
-              ] as [ExportFilter, string, number][]
-            ).map(([value, label, count]) => (
-              <button
-                className={filter === value ? "active" : ""}
-                key={value}
-                onClick={() => setFilter(value)}
-                type="button"
-              >
-                {label} <span>{count}</span>
-              </button>
-            ))}
+          <div className="filter-groups">
+            <div className="filter-tabs">
+              {(
+                [
+                  ["ALL", "Tất cả"],
+                  ["READY", "Sẵn sàng"],
+                  ["PROCESSING", "Đang xử lý"],
+                  ["FAILED", "Lỗi"],
+                ] as [ExportFilter, string][]
+              ).map(([value, label]) => (
+                <button
+                  className={filter === value ? "active" : ""}
+                  key={value}
+                  onClick={() => setFilter(value)}
+                  type="button"
+                >
+                  {label} <span>{statusCount(value)}</span>
+                </button>
+              ))}
+            </div>
+            <div className="filter-tabs">
+              {(
+                [
+                  ["motorcycle", "Xe máy"],
+                  ["car", "Ô tô"],
+                ] as ["motorcycle" | "car", string][]
+              ).map(([value, label]) => (
+                <button
+                  className={vehicleFilter === value ? "active" : ""}
+                  key={value}
+                  onClick={() =>
+                    setVehicleFilter((current) => (current === value ? "all" : value))
+                  }
+                  type="button"
+                >
+                  {label} <span>{vehicleCount(value)}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -117,8 +138,8 @@ export function ExportsPage({
       <section className="card table-card">
         <header>
           <div>
-            <h2>Danh sách job</h2>
-            <p>Trạng thái và tiến độ cập nhật từ hệ thống xử lý.</p>
+            <h2>Danh sách kết quả</h2>
+            <p>Trạng thái, tiến độ và nút xuất GT của từng job.</p>
           </div>
         </header>
         {jobs.length === 0 ? (
@@ -137,6 +158,7 @@ export function ExportsPage({
               <thead>
                 <tr>
                   <th>Job</th>
+                  <th>Loại xe</th>
                   <th>Tiến độ</th>
                   <th>Trạng thái</th>
                   <th>Cập nhật</th>
@@ -153,6 +175,11 @@ export function ExportsPage({
                         <strong>{job.source_name}</strong>
                         <small>{job.job_code}</small>
                       </button>
+                    </td>
+                    <td>
+                      <StatusBadge tone={job.vehicle_type === "car" ? "info" : "neutral"}>
+                        {job.vehicle_type === "car" ? "Ô tô" : "Xe máy"}
+                      </StatusBadge>
                     </td>
                     <td>
                       <div className="table-progress">
@@ -220,16 +247,17 @@ export function ExportsPage({
                     </td>
                   </tr>
                 ))}
+                {Array.from({ length: PER_PAGE - pageJobs.length }).map((_, index) => (
+                  <tr aria-hidden="true" className="spacer-row" key={`sp-${index}`}>
+                    <td colSpan={8} />
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
         )}
         {filtered.length > PER_PAGE && (
-          <div className="pagination">
-            <span className="pagination-info">
-              {(page - 1) * PER_PAGE + 1}–{Math.min(page * PER_PAGE, filtered.length)} /{" "}
-              {filtered.length} job
-            </span>
+          <div className="pagination pagination-end">
             <div className="pagination-controls">
               <button
                 className="pagination-btn"

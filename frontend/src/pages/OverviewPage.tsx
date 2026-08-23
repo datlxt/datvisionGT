@@ -43,15 +43,21 @@ export function OverviewPage({
   onCreate,
   onDelete,
   onOpen,
+  onOpenCondense,
 }: {
   jobs: Job[];
   onCreate: (scope: Scope) => void;
   onDelete: (job: Job) => Promise<void>;
   onOpen: (job: Job) => void;
+  onOpenCondense: () => void;
 }) {
   const deletion = useJobDeletion(onDelete);
   const [scope, setScope] = useState<Scope>("video");
   const [condenseList, setCondenseList] = useState<CondenseStatus[]>([]);
+  const [page, setPage] = useState(1);
+  const PER_PAGE = 4;
+  // Reset to the first page whenever the user switches Video / Xe máy / Ô tô.
+  useEffect(() => setPage(1), [scope]);
 
   useEffect(() => {
     api<CondenseStatus[]>("/api/v1/condense")
@@ -67,7 +73,6 @@ export function OverviewPage({
   ).length;
   const review = scoped.filter((job) => job.status === "WAITING_FOR_REVIEW").length;
   const completed = scoped.filter((job) => job.status === "COMPLETED").length;
-  const failed = scoped.filter((job) => job.status === "FAILED").length;
 
   const condenseDone = condenseList.filter((item) => item.status === "completed");
   const condenseBusy = condenseList.filter((item) =>
@@ -96,6 +101,47 @@ export function OverviewPage({
         { label: "Chờ kiểm duyệt", value: review, icon: "shield", tone: "orange" },
         { label: "Đã hoàn thành", value: completed, icon: "check", tone: "green" },
       ];
+
+  const jobPageCount = Math.max(1, Math.ceil(scoped.length / PER_PAGE));
+  const condensePageCount = Math.max(1, Math.ceil(condenseList.length / PER_PAGE));
+  const pagedJobs = scoped.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+  const pagedCondense = condenseList.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+  // Keep the page valid when a delete shrinks the current list.
+  const activePageCount = isVideo ? condensePageCount : jobPageCount;
+  useEffect(() => {
+    if (page > activePageCount) setPage(activePageCount);
+  }, [page, activePageCount]);
+
+  const pagination = (pageCount: number) =>
+    pageCount > 1 ? (
+      <div className="pagination">
+        <div className="pagination-controls">
+          <button
+            className="pagination-btn"
+            disabled={page <= 1}
+            onClick={() => setPage((value) => Math.max(1, value - 1))}
+            type="button"
+          >
+            <span className="pagination-flip">
+              <Icon name="arrow" size={15} />
+            </span>
+            Trước
+          </button>
+          <span className="pagination-page">
+            Trang {page} / {pageCount}
+          </span>
+          <button
+            className="pagination-btn"
+            disabled={page >= pageCount}
+            onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
+            type="button"
+          >
+            Sau
+            <Icon name="arrow" size={15} />
+          </button>
+        </div>
+      </div>
+    ) : null;
 
   return (
     <section className="page overview-page">
@@ -158,7 +204,7 @@ export function OverviewPage({
             </header>
             {condenseList.length === 0 ? (
               <EmptyState
-                description="Vào tab Cắt video để bỏ thời gian không có xe và dồn các lượt xe lại."
+                description="Vào mục Cắt video để loại bỏ các đoạn không có phương tiện và gộp các lượt xe."
                 title="Chưa có video cắt"
               />
             ) : (
@@ -175,8 +221,17 @@ export function OverviewPage({
                     </tr>
                   </thead>
                   <tbody>
-                    {condenseList.slice(0, 8).map((item) => (
-                      <tr key={item.id}>
+                    {pagedCondense.map((item) => (
+                      <tr
+                        className="clickable-row"
+                        key={item.id}
+                        onClick={onOpenCondense}
+                        title={
+                          item.status === "completed"
+                            ? "Mở trang Cắt video"
+                            : "Đang cắt — mở để xem tiến trình"
+                        }
+                      >
                         <td>
                           <div className="file-cell">
                             <Icon name="scissors" size={18} />
@@ -206,6 +261,7 @@ export function OverviewPage({
                               aria-label={`Tải ${item.source_name ?? "video"}`}
                               className="icon-button"
                               href={`/api/v1/condense/${item.id}/download`}
+                              onClick={(event) => event.stopPropagation()}
                               title="Tải video đã cắt"
                             >
                               <Icon name="download" size={17} />
@@ -214,8 +270,14 @@ export function OverviewPage({
                         </td>
                       </tr>
                     ))}
+                    {Array.from({ length: PER_PAGE - pagedCondense.length }).map((_, index) => (
+                      <tr aria-hidden="true" className="spacer-row" key={`sp-${index}`}>
+                        <td colSpan={6} />
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
+                {pagination(condensePageCount)}
               </div>
             )}
           </section>
@@ -241,15 +303,6 @@ export function OverviewPage({
                   <p>tổng sau khi cắt</p>
                 </div>
               </div>
-              <div>
-                <span className="attention-icon attention-orange">
-                  <Icon name="scissors" size={22} />
-                </span>
-                <div>
-                  <strong>{formatTime(totalCutMs)}</strong>
-                  <p>tổng thời gian đã bỏ</p>
-                </div>
-              </div>
             </div>
             <p className="backend-note">
               Video đã cắt có thể tải về hoặc đưa thẳng vào làm GT ở tab Cắt video.
@@ -257,7 +310,7 @@ export function OverviewPage({
           </aside>
         </div>
       ) : (
-        <div className="overview-grid">
+        <div className="overview-grid overview-grid-full">
           <section className="card table-card">
             <header>
               <div>
@@ -293,7 +346,7 @@ export function OverviewPage({
                     </tr>
                   </thead>
                   <tbody>
-                    {scoped.slice(0, 8).map((job) => (
+                    {pagedJobs.map((job) => (
                       <tr className="clickable-row" key={job.id} onClick={() => onOpen(job)}>
                         <td>
                           <div className="file-cell">
@@ -333,48 +386,17 @@ export function OverviewPage({
                         </td>
                       </tr>
                     ))}
+                    {Array.from({ length: PER_PAGE - pagedJobs.length }).map((_, index) => (
+                      <tr aria-hidden="true" className="spacer-row" key={`sp-${index}`}>
+                        <td colSpan={6} />
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
+                {pagination(jobPageCount)}
               </div>
             )}
           </section>
-
-          <aside className="card attention-card">
-            <h2>Việc cần xử lý</h2>
-            <div className="attention-list">
-              <div>
-                <span className="attention-icon attention-blue">
-                  <Icon name="shield" size={22} />
-                </span>
-                <div>
-                  <strong>{review}</strong>
-                  <p>job chờ kiểm duyệt</p>
-                </div>
-              </div>
-              <div>
-                <span className="attention-icon attention-orange">
-                  <Icon name="clock" size={22} />
-                </span>
-                <div>
-                  <strong>{processing}</strong>
-                  <p>job đang xử lý</p>
-                </div>
-              </div>
-              <div>
-                <span className="attention-icon attention-red">
-                  <Icon name="alert" size={22} />
-                </span>
-                <div>
-                  <strong>{failed}</strong>
-                  <p>job thất bại cần kiểm tra</p>
-                </div>
-              </div>
-            </div>
-            <p className="backend-note">
-              Thống kê lượt xe có độ tin thấp và nghi trùng chưa được tổng hợp nên chưa hiển thị
-              tại đây.
-            </p>
-          </aside>
         </div>
       )}
 
