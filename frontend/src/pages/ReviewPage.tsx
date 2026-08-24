@@ -803,8 +803,7 @@ export function ReviewPage({ job }: { job: Job }) {
         results.cross_check?.status !== "running" &&
         results.cross_check?.status !== "pending" ? (
           <>
-            <Icon name="alert" size={15} /> Chưa bật đối chiếu AI — phiên này chạy offline, không có
-            bước đọc lại bằng AI cloud.
+            <Icon name="alert" size={15} /> Chưa bật đối chiếu AI (phiên chạy offline).
           </>
         ) : results.cross_check?.status === "running" ||
           results.cross_check?.status === "pending" ? (
@@ -837,20 +836,18 @@ export function ReviewPage({ job }: { job: Job }) {
         <div className="crosscheck-inline">
           {missedScan.status === "pending" || missedScan.status === "running" ? (
             <>
-              <Icon name="clock" size={15} /> AI đang rà soát các đoạn trống để tìm phương tiện bị
-              bỏ sót… <em>(tự động)</em>
+              <Icon name="clock" size={15} /> Đang rà soát đoạn trống tìm xe bỏ sót… <em>(tự động)</em>
             </>
           ) : (missedScan.candidates?.length ?? 0) > 0 ? (
             <>
-              <Icon name="alert" size={15} /> AI phát hiện{" "}
-              <strong>{missedScan.candidates.length}</strong> phương tiện nghi bị bỏ sót, chưa có
-              trong danh sách. Kiểm tra trên thanh thời gian (tab Video) để bổ sung.
+              <Icon name="alert" size={15} /> AI nghi{" "}
+              <strong>{missedScan.candidates.length}</strong> xe bị bỏ sót — xem thanh thời gian (tab
+              Video) để bổ sung.
             </>
           ) : (
             <>
               <Icon name="check" size={15} /> AI đã rà soát{" "}
-              <strong>{missedScan.gaps ?? 0}</strong> đoạn trống, không phát hiện phương tiện bị bỏ
-              sót.
+              <strong>{missedScan.gaps ?? 0}</strong> đoạn trống, không có xe bỏ sót.
             </>
           )}
         </div>
@@ -860,16 +857,18 @@ export function ReviewPage({ job }: { job: Job }) {
         <button
           className="button button-secondary button-compact"
           onClick={() => setShowMissed(true)}
+          title="Bổ sung xe bị bỏ sót"
           type="button"
         >
-          <Icon name="plus" size={16} /> Bổ sung xe bỏ sót
+          <Icon name="plus" size={16} /> Bổ sung xe
         </button>
         <button
           className="button button-secondary button-compact"
           onClick={() => setShowCompare(true)}
+          title="Đối chiếu với file GT có sẵn"
           type="button"
         >
-          <Icon name="upload" size={16} /> Đối chiếu file GT
+          <Icon name="upload" size={16} /> Đối chiếu GT
         </button>
         {/* AI cross-check runs automatically after processing; this is a manual re-run fallback. */}
         <button
@@ -881,6 +880,21 @@ export function ReviewPage({ job }: { job: Job }) {
         >
           <Icon name="refresh" size={16} /> {crossBusy ? "Đang chạy…" : "Chạy lại AI"}
         </button>
+        {/* Primary export — kept in the toolbar (not a floating button) so it never covers the review
+            controls. Turns green-emphasised once every case is handled (Cần xử lý = 0). */}
+        <a
+          className={`button button-primary button-compact export-top${
+            needCheckCount === 0 ? " export-top-ready" : ""
+          }`}
+          href={`/api/v1/jobs/${job.id}/export.xlsx`}
+          title={
+            needCheckCount === 0
+              ? "Đã soát xong tất cả — xuất GT ra Excel"
+              : "Xuất GT ra Excel (trạng thái hiện tại)"
+          }
+        >
+          <Icon name="download" size={16} /> Xuất Excel
+        </a>
       </div>
       </div>
 
@@ -1189,7 +1203,7 @@ export function ReviewPage({ job }: { job: Job }) {
                     <i className="ct-sw ct-verified" /> Đáng tin cậy / đã duyệt
                   </span>
                   <span>
-                    <i className="ct-sw ct-low_confidence" /> Cần xử lý (gồm xe không biển)
+                    <i className="ct-sw ct-low_confidence" /> Cần xử lý
                   </span>
                   <span>
                     <i className="ct-gap-legend" /> Nghi bỏ sót
@@ -1533,21 +1547,6 @@ export function ReviewPage({ job }: { job: Job }) {
         </div>
       )}
 
-      {/* Always-reachable export: soát xong ở dưới là bấm ngay, khỏi cuộn lên. Rung nhẹ khi mọi ca
-          đã xử lý xong (Cần xử lý = 0) để nhắc người dùng đã có thể xuất. */}
-      <a
-        className={`button button-primary export-fab${
-          needCheckCount === 0 ? " export-fab-ready" : ""
-        }`}
-        href={`/api/v1/jobs/${job.id}/export.xlsx`}
-        title={
-          needCheckCount === 0
-            ? "Đã soát xong tất cả — xuất GT ra Excel"
-            : "Xuất GT ra Excel (trạng thái hiện tại)"
-        }
-      >
-        <Icon name="download" size={19} /> Xuất Excel
-      </a>
 
       {hoverTrack && (
         <div

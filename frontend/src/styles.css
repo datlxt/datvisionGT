@@ -1322,6 +1322,29 @@ code {
   }
 }
 
+/* Xuất Excel now lives in the top action row. When every case is handled it pulses a green glow ring
+   (no scale, so it doesn't jitter its neighbours in the toolbar). */
+.export-top-ready {
+  animation: export-top-ready 1.8s ease-in-out infinite;
+}
+
+@keyframes export-top-ready {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(120, 190, 30, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(120, 190, 30, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .export-top-ready {
+    animation: none;
+    box-shadow: 0 0 0 3px rgba(120, 190, 30, 0.5);
+  }
+}
+
 .toast-corner-close {
   flex: none;
   margin-left: 2px;
@@ -1747,8 +1770,10 @@ code {
 
 /* One cohesive control panel instead of three separate floating cards. */
 .review-controls {
+  flex: none;
+  width: 100%;
   max-width: 1500px;
-  margin: 0 auto 8px;
+  margin: 0 auto 6px;
   padding: 0;
   overflow: hidden;
 }
@@ -1759,10 +1784,15 @@ code {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 10px 14px 4px;
+  padding: 6px 14px 2px;
 }
 
 .review-title-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 12px;
+  row-gap: 0;
   min-width: 0;
 }
 
@@ -1776,7 +1806,7 @@ code {
 }
 
 .review-filename {
-  margin: 2px 0 0;
+  margin: 0;
   max-width: 60vw;
   overflow: hidden;
   font-size: 16px;
@@ -1792,13 +1822,13 @@ code {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 8px 14px;
+  padding: 4px 14px;
 }
 
 .review-status {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 1px;
   min-width: 0;
 }
 
@@ -1815,10 +1845,10 @@ code {
 .crosscheck-inline {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 1px 0;
+  gap: 6px;
+  padding: 0;
   color: #15803d;
-  font-size: 12.5px;
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -1881,8 +1911,13 @@ code {
 
 .evidence-video video {
   display: block;
-  width: 100%;
-  max-height: 360px;
+  /* Capped by the leftover screen height so the timeline + legend + footer always show without a
+     scrollbar; keeps real aspect (no distortion, no black bars). It fills the width until the height
+     cap kicks in, then it just gets a small side gap. */
+  max-width: 100%;
+  max-height: calc(100vh - 350px);
+  width: auto;
+  height: auto;
   margin: 0 auto;
   border-radius: 10px;
   background: #000000;
@@ -1978,11 +2013,12 @@ code {
 
 .ct-legend {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  margin-top: 10px;
-  font-size: 12px;
+  flex-wrap: nowrap;
+  gap: 4px 14px;
+  margin-top: 5px;
+  font-size: 11px;
   color: #475569;
+  white-space: nowrap;
 }
 
 .ct-legend span {
@@ -3344,7 +3380,15 @@ code {
 /* Review */
 
 .review-page {
-  padding: 24px;
+  /* Fixed to one screen (viewport minus the 48px topbar): the PAGE never scrolls — only the columns
+     scroll inside themselves. Kills the dead bottom gutter and stops sibling columns from growing
+     empty space when one panel expands. */
+  height: calc(100vh - 48px);
+  min-height: 0;
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .review-toolbar {
@@ -3352,8 +3396,8 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  min-height: 46px;
-  padding: 6px 12px;
+  min-height: 40px;
+  padding: 4px 12px 6px;
 }
 
 .review-toolbar > label {
@@ -3435,15 +3479,17 @@ code {
 .review-grid {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr) 380px;
-  /* All three columns share ONE height (the tallest content) and each fills it gracefully: the list
-     stretches + scrolls, the evidence media centers, the review nav pins to the bottom. When panels
-     collapse/expand the tallest shrinks and the others follow — the three bottoms stay aligned. */
+  /* Fills the space under the header and is the SCROLL BOUNDARY: the grid itself never scrolls
+     (overflow hidden), each column stretches to the full height and scrolls inside itself. So the
+     three bottoms always line up and expanding one panel never pushes the others. */
   align-items: stretch;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
   gap: 12px;
+  width: 100%;
   max-width: 1500px;
   margin: 0 auto;
-  /* Bottom gutter so the floating "Xuất Excel" button never covers the last row (record nav). */
-  padding-bottom: 72px;
 }
 
 .track-panel {
@@ -3569,24 +3615,21 @@ code {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  padding: 11px;
+  padding: 6px 11px 10px;
+  overflow: hidden;
 }
 
-/* Holds the image/video between the tabs and the footer. Grows to fill the shared column height and
-   centers the media, so the evidence block matches the other two columns without stretching the
-   aspect-locked frame (its bbox overlays must keep the image's ratio). */
+/* Holds the image/video between the tabs and the footer. Top-aligned natural flow so the media keeps
+   its full size; if the whole column is taller than the screen the evidence column scrolls (like the
+   others) instead of the media overlapping the footer. */
 .evidence-stage {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
+  display: block;
 }
 
 .evidence-tabs {
   display: flex;
   align-items: center;
-  min-height: 38px;
+  min-height: 30px;
 }
 
 .evidence-tabs button {
@@ -3600,7 +3643,7 @@ code {
 }
 
 .evidence-tabs button.active {
-  border-bottom-color: var(--blue);
+  border-bottom-color: transparent;
   color: var(--blue);
   font-weight: 700;
 }
@@ -3622,7 +3665,9 @@ code {
   /* Fallback ratio; the real frame ratio is set inline from job.width/height so the box matches the
      image exactly — no letterbox black bars, and the bbox overlays stay aligned. */
   aspect-ratio: 16 / 9;
-  max-height: 380px;
+  /* Fill the full column width (real ratio set inline from job.width/height) so the frame lines up
+     with the column edges like the video does. */
+  width: 100%;
   margin: 0 auto;
   border-radius: 9px;
   background: #0a1621;
@@ -3758,7 +3803,7 @@ code {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding-top: 11px;
+  padding-top: 6px;
   color: var(--muted);
   font-size: 8px;
 }
@@ -3766,7 +3811,9 @@ code {
 .gt-panel {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* This column scrolls inside itself when the AI/note panels expand — it does NOT grow the page or
+     shove the other columns. */
+  overflow-y: auto;
 }
 
 .prediction-section,
