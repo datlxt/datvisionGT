@@ -159,7 +159,10 @@ export default function App() {
           }}
           onDelete={deleteJob}
           onOpen={openJob}
-          onOpenCondense={() => setView("condense")}
+          onSendCondenseToCreate={(item) => {
+            setCondensedForCreate(item);
+            setView("create");
+          }}
         />
       );
     }

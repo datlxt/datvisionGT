@@ -189,7 +189,7 @@ export function ProcessingPage({
               type="button"
             >
               <Icon name="refresh" size={18} />
-              {retrying ? "Đang đưa lại vào hàng đợi…" : "Tiếp tục job bị gián đoạn"}
+              {retrying ? "Đang đưa lại vào hàng đợi…" : "Tiếp tục phiên bị gián đoạn"}
             </button>
           ) : running ? (
             <button
@@ -199,7 +199,7 @@ export function ProcessingPage({
               type="button"
             >
               <Icon name="x" size={18} />
-              {cancelling ? "Đang hủy…" : "Hủy job"}
+              {cancelling ? "Đang hủy…" : "Hủy phiên"}
             </button>
           ) : (
             <button
@@ -218,7 +218,7 @@ export function ProcessingPage({
       <ConfirmDialog
         busy={cancelling}
         cancelLabel="Không, tiếp tục chạy"
-        confirmLabel="Hủy job"
+        confirmLabel="Hủy phiên"
         description={
           <>
             Dừng xử lý <strong>{job.source_name}</strong>? Tiến độ hiện tại (
@@ -229,7 +229,7 @@ export function ProcessingPage({
         onCancel={() => setShowCancel(false)}
         onConfirm={cancel}
         open={showCancel}
-        title="Hủy job đang chạy?"
+        title="Hủy phiên đang chạy?"
       />
     </section>
   );
@@ -346,7 +346,7 @@ function LiveView({
             Show a clear banner so the frozen last frame doesn't look like the job hung. */}
         {progress >= 90 && (
           <div className="live-finishing">
-            <Icon name="clock" size={16} /> Đã detect xong — đang gộp lượt và đối chiếu AI…
+            <Icon name="clock" size={16} /> Đã phát hiện xong — đang gộp lượt xe và đối chiếu AI…
           </div>
         )}
       </div>

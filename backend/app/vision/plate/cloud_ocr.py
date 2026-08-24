@@ -29,7 +29,7 @@ _MAX_RETRIES = 3
 # the old 10 fine defect labels — 3 clear levels let the readers agree far more often. The fine
 # defect taxonomy is left for the HUMAN to fill in the export.
 _QUALITY_CATEGORIES = (
-    "Rõ",
+    "Đọc rõ",
     "Khó đọc",
     "Không đọc được",
 )
@@ -66,7 +66,7 @@ def _upscale_for_ai(image_bytes: bytes) -> bytes:
 # Clear per-label criteria so the model doesn't confuse look-alike defects — the common mistake
 # is calling an over-bright / washed-out plate "bẩn" (dirty) instead of "chói sáng" (glare).
 _QUALITY_CRITERIA = (
-    "- 'Rõ': biển sạch, sắc nét, đọc CHẮC CHẮN được toàn bộ ký tự, không phải cố gắng.\n"
+    "- 'Đọc rõ': biển sạch, sắc nét, đọc CHẮC CHẮN được toàn bộ ký tự, không phải cố gắng.\n"
     "- 'Khó đọc': mờ / bẩn / chói / nghiêng / ở xa nhưng VẪN đọc ra được biển khi nhìn kỹ.\n"
     "- 'Không đọc được': bị che, mất số, quá mờ/loá — KHÔNG thể đọc chắc chắn biển số.\n"
 )
@@ -82,14 +82,14 @@ _PROMPT = (
     "   • Quân đội (biển đỏ): 2-3 CHỮ đầu rồi tới số (vd KA-1234, ABS-12-34) — không có số tỉnh.\n"
     "2) Mức độ nhận diện biển: chọn ĐÚNG MỘT trong 3 mức, dựa trên việc ĐỌC ĐƯỢC hay không:\n"
     + _QUALITY_CRITERIA
-    + "quality PHẢI copy Y HỆT một trong 3 chuỗi: 'Rõ', 'Khó đọc', 'Không đọc được'. "
+    + "quality PHẢI copy Y HỆT một trong 3 chuỗi: 'Đọc rõ', 'Khó đọc', 'Không đọc được'. "
     "Trả về JSON thuần: {\"plate\": \"...\", \"quality\": \"...\", \"confidence\": 0..1}."
 )
 
 
 # With only 3 levels each maps to its own group — consensus is now a direct level match.
 _QUALITY_GROUP = {
-    "Rõ": "ok",
+    "Đọc rõ": "ok",
     "Khó đọc": "hard",
     "Không đọc được": "unreadable",
 }

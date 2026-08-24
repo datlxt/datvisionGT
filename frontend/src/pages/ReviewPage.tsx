@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { GtCompareDialog } from "../components/GtCompareDialog";
 import { Icon } from "../components/Icon";
@@ -41,7 +41,7 @@ function verifyTone(status: GroundTruthRecord["verify_status"]) {
 // fine defect taxonomy moved to a human-only column in the export. "Xe không biển" stays here as the
 // no-plate marker (drives the sentinel GT).
 const QUALITY_OPTIONS = [
-  "Rõ",
+  "Đọc rõ",
   "Khó đọc",
   "Không đọc được",
   "Xe không biển",
@@ -348,11 +348,31 @@ export function ReviewPage({ job }: { job: Job }) {
   const [gtReload, setGtReload] = useState(0);
   const [showCompare, setShowCompare] = useState(false);
   const [evidenceTab, setEvidenceTab] = useState<"frame" | "video">("frame");
+  // Magnifier loupe over the full frame — follows the cursor so hard plates can be read closely.
+  const [loupe, setLoupe] = useState<{
+    left: number;
+    top: number;
+    bgX: number;
+    bgY: number;
+    bgW: number;
+    bgH: number;
+  } | null>(null);
   const [hoverTrack, setHoverTrack] = useState<{
     event: EventResult;
-    top: number;
+    anchorY: number; // vertical CENTER of the hovered row — the popup is centered on this, then clamped
     left: number;
   } | null>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const [hoverTop, setHoverTop] = useState(0);
+  // Center the popup on the hovered row, then clamp so it never runs off the top/bottom of the
+  // screen — the last cases used to overflow because the popup was anchored at the row's TOP with a
+  // too-small height guess. Measured after render (and after the crop image loads) for exactness.
+  useLayoutEffect(() => {
+    if (!hoverTrack || !popupRef.current) return;
+    const height = popupRef.current.offsetHeight;
+    const top = Math.max(12, Math.min(hoverTrack.anchorY - height / 2, window.innerHeight - height - 12));
+    setHoverTop(top);
+  }, [hoverTrack]);
   // Success toast lives HERE (not in GtPanel): GtPanel remounts on save (its key changes), which
   // would drop a toast owned by it. This parent survives, so the confirmation actually shows.
   const [saveToast, setSaveToast] = useState<string | null>(null);
@@ -361,6 +381,13 @@ export function ReviewPage({ job }: { job: Job }) {
     const timer = setTimeout(() => setSaveToast(null), 5000);
     return () => clearTimeout(timer);
   }, [saveToast]);
+  // The "sửa khác model" heads-up also lives here so both toasts share one stack (no overlap).
+  const [diffToast, setDiffToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!diffToast) return;
+    const timer = setTimeout(() => setDiffToast(null), 6000);
+    return () => clearTimeout(timer);
+  }, [diffToast]);
   const [crossBusy, setCrossBusy] = useState(false);
   const [crossResult, setCrossResult] = useState<{
     checked: number;
@@ -652,7 +679,8 @@ export function ReviewPage({ job }: { job: Job }) {
   function selectTrack(trackId: string, startMs: number) {
     manualSelectUntil.current = Date.now() + 1500;
     setSelectedId(trackId);
-    setEvidenceTab("video");
+    // Keep whichever evidence tab the reviewer is on (frame vs video) when they move between cases —
+    // don't yank them to Video. The video is still seeked below so it's positioned if they switch.
     if (videoRef.current) {
       // Clicking a case = REVIEW that case: pause and jump to its start so the selection stays put.
       // (While playing, the follow-effect would keep re-selecting the track under the playhead —
@@ -775,7 +803,7 @@ export function ReviewPage({ job }: { job: Job }) {
         results.cross_check?.status !== "running" &&
         results.cross_check?.status !== "pending" ? (
           <>
-            <Icon name="alert" size={15} /> Chưa bật đối chiếu AI — job này chạy offline, không có
+            <Icon name="alert" size={15} /> Chưa bật đối chiếu AI — phiên này chạy offline, không có
             bước đọc lại bằng AI cloud.
           </>
         ) : results.cross_check?.status === "running" ||
@@ -917,7 +945,7 @@ export function ReviewPage({ job }: { job: Job }) {
                       const r = e.currentTarget.getBoundingClientRect();
                       setHoverTrack({
                         event,
-                        top: Math.min(r.top, window.innerHeight - 330),
+                        anchorY: r.top + r.height / 2,
                         left: r.right + 10,
                       });
                     }}
@@ -972,9 +1000,9 @@ export function ReviewPage({ job }: { job: Job }) {
               >
                 Video
               </button>
-              <span>Bằng chứng</span>
             </div>
 
+            <div className="evidence-stage">
             {evidenceTab === "video" ? (
               <div className="evidence-video">
                 <video
@@ -1174,6 +1202,22 @@ export function ReviewPage({ job }: { job: Job }) {
             ) : (
             <div
               className="full-frame"
+              onMouseLeave={() => setLoupe(null)}
+              onMouseMove={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                const mx = event.clientX - rect.left;
+                const my = event.clientY - rect.top;
+                const Z = 2.6;
+                const SIZE = 176;
+                setLoupe({
+                  left: mx - SIZE / 2,
+                  top: my - SIZE / 2,
+                  bgX: -(mx * Z - SIZE / 2),
+                  bgY: -(my * Z - SIZE / 2),
+                  bgW: rect.width * Z,
+                  bgH: rect.height * Z,
+                });
+              }}
               style={
                 job.width && job.height
                   ? { aspectRatio: `${job.width} / ${job.height}` }
@@ -1181,6 +1225,18 @@ export function ReviewPage({ job }: { job: Job }) {
               }
             >
               <img alt={`Ảnh toàn cảnh ${selected.track_code}`} src={selected.full_frame_url} />
+              {loupe && (
+                <div
+                  className="frame-loupe"
+                  style={{
+                    left: loupe.left,
+                    top: loupe.top,
+                    backgroundImage: `url(${selected.full_frame_url})`,
+                    backgroundSize: `${loupe.bgW}px ${loupe.bgH}px`,
+                    backgroundPosition: `${loupe.bgX}px ${loupe.bgY}px`,
+                  }}
+                />
+              )}
               <span className="frame-stamp">
                 {formatTime(selected.best_timestamp_ms)} · Frame{" "}
                 {selected.best_frame_number.toLocaleString("vi-VN")}
@@ -1207,6 +1263,7 @@ export function ReviewPage({ job }: { job: Job }) {
               )}
             </div>
             )}
+            </div>
 
             <footer className="evidence-footer">
               <Icon name="shield" size={16} /> Không bằng chứng, không ghi nhận.
@@ -1233,13 +1290,10 @@ export function ReviewPage({ job }: { job: Job }) {
                   </div>
                 )}
                 <div>
-                  <dt>Độ tin đọc biển</dt>
-                  <dd>{confidence(selected.confidence)}</dd>
-                </div>
-                <div>
-                  <dt>Độ tin phát hiện (biển / xe)</dt>
+                  <dt>Độ tin (đọc · biển · xe)</dt>
                   <dd>
-                    {confidence(selected.plate_confidence)} / {confidence(selected.vehicle_confidence)}
+                    {confidence(selected.confidence)} · {confidence(selected.plate_confidence)} ·{" "}
+                    {confidence(selected.vehicle_confidence)}
                   </dd>
                 </div>
               </dl>
@@ -1253,7 +1307,9 @@ export function ReviewPage({ job }: { job: Job }) {
                   ))}
                 </div>
               )}
-              {selected.normalized_plate && isRiskyRead(selected) && (
+              {selected.normalized_plate &&
+                isRiskyRead(selected) &&
+                !selected.quality_flags.includes("OCR_DISAGREEMENT") && (
                 <div className="prediction-warning" role="alert">
                   <Icon name="alert" size={18} />
                   <p>
@@ -1291,6 +1347,7 @@ export function ReviewPage({ job }: { job: Job }) {
               cloudQualityAll={selected.cloud_quality_all}
               defaultPlate={consensusPlate(selected)}
               onChanged={() => setGtReload((value) => value + 1)}
+              onDiff={setDiffToast}
               onNotify={setSaveToast}
               qualityDisagree={selected.quality_flags.includes("QUALITY_DISAGREEMENT")}
               suspectNoPlate={selected.classification === "NO_PLATE"}
@@ -1444,10 +1501,35 @@ export function ReviewPage({ job }: { job: Job }) {
         title="Xoá khoảng nghi bỏ sót?"
       />
 
-      {saveToast && (
-        <div className="toast-corner toast-corner-success" role="status">
-          <Icon name="check" size={16} />
-          <div>{saveToast}</div>
+      {(saveToast || diffToast) && (
+        <div className="toast-stack">
+          {saveToast && (
+            <div className="toast-corner toast-corner-success" role="status">
+              <Icon name="check" size={16} />
+              <div>{saveToast}</div>
+              <button
+                aria-label="Đóng thông báo"
+                className="toast-corner-close"
+                onClick={() => setSaveToast(null)}
+                type="button"
+              >
+                <Icon name="x" size={14} />
+              </button>
+            </div>
+          )}
+          {diffToast && (
+            <div className="toast-corner" role="status">
+              <div>{diffToast}</div>
+              <button
+                aria-label="Đóng thông báo"
+                className="toast-corner-close"
+                onClick={() => setDiffToast(null)}
+                type="button"
+              >
+                <Icon name="x" size={14} />
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1470,12 +1552,21 @@ export function ReviewPage({ job }: { job: Job }) {
       {hoverTrack && (
         <div
           className="track-popup"
+          ref={popupRef}
           role="tooltip"
-          style={{ position: "fixed", top: hoverTrack.top, left: hoverTrack.left }}
+          style={{ position: "fixed", top: hoverTop, left: hoverTrack.left }}
         >
           <img
             alt={`Crop ${hoverTrack.event.track_code}`}
             className="track-popup-crop"
+            onLoad={() => {
+              // The crop's height isn't known until it loads; re-clamp so a tall crop still fits.
+              if (!popupRef.current) return;
+              const height = popupRef.current.offsetHeight;
+              setHoverTop(
+                Math.max(12, Math.min(hoverTrack.anchorY - height / 2, window.innerHeight - height - 12)),
+              );
+            }}
             src={hoverTrack.event.plate_crop_url ?? hoverTrack.event.vehicle_crop_url}
           />
           <dl className="track-popup-meta">
@@ -1514,6 +1605,7 @@ function GtPanel({
   record,
   onChanged,
   onNotify,
+  onDiff,
   cloudQuality,
   cloudQualityAll,
   defaultPlate,
@@ -1524,6 +1616,7 @@ function GtPanel({
   record: GroundTruthRecord | null;
   onChanged: () => void;
   onNotify?: (message: string) => void;
+  onDiff?: (message: string | null) => void;
   cloudQuality?: string | null;
   cloudQualityAll?: string[];
   defaultPlate?: string | null;
@@ -1563,17 +1656,16 @@ function GtPanel({
     gtText.trim().length > 0 &&
     modelPlate.length > 0 &&
     gtText.trim().toUpperCase() !== modelPlate;
-  // Surface it as a transient corner popup (auto-hides after a few seconds, or dismiss with X) —
-  // a heads-up the reviewer notices, not a permanent line cluttering the panel.
-  const [diffToast, setDiffToast] = useState(false);
+  // Surface it via the PARENT's toast stack (so it stacks with the "Đã lưu" toast instead of
+  // overlapping). Fire on each transition into "differs"; clear it otherwise and on unmount.
   useEffect(() => {
-    if (!gtDiffersFromModel) {
-      setDiffToast(false);
-      return;
-    }
-    setDiffToast(true);
-    const timer = setTimeout(() => setDiffToast(false), 6000);
-    return () => clearTimeout(timer);
+    onDiff?.(
+      gtDiffersFromModel
+        ? `Bạn đang sửa khác model đọc (${modelPlate}). Số bạn nhập sẽ là GT chính thức khi lưu; kết quả model bên trái giữ nguyên để đối chiếu.`
+        : null,
+    );
+    return () => onDiff?.(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gtDiffersFromModel, modelPlate]);
 
   if (!record) {
@@ -1581,8 +1673,7 @@ function GtPanel({
       <section className="ground-truth-section">
         <div className="panel-section-title">
           <div>
-            <span>Ground Truth</span>
-            <h2>Kiểm duyệt của con người</h2>
+            <h2>Kiểm duyệt thủ công</h2>
           </div>
         </div>
         <p className="backend-note">Đang tạo bản nháp GT cho lượt xe này…</p>
@@ -1626,50 +1717,36 @@ function GtPanel({
 
   return (
     <section className="ground-truth-section">
-      {diffToast && (
-        <div className="toast-corner" role="status">
-          <div>
-            Bạn đang sửa khác <strong>model đọc ({modelPlate})</strong>. Số bạn nhập sẽ là GT chính
-            thức khi lưu; kết quả model bên trái giữ nguyên để đối chiếu.
-          </div>
-          <button
-            aria-label="Đóng thông báo"
-            className="toast-corner-close"
-            onClick={() => setDiffToast(false)}
-            type="button"
-          >
-            <Icon name="x" size={14} />
-          </button>
-        </div>
-      )}
       <div className="panel-section-title">
         <div>
-          <h2>Kiểm duyệt GT</h2>
+          <h2>Kiểm duyệt thủ công</h2>
         </div>
         <StatusBadge tone={verifyTone(record.verify_status)}>
           {VERIFY_LABEL[record.verify_status]}
         </StatusBadge>
       </div>
-      <label>
-        Biển số đúng (GT)
-        <input
-          disabled={isNoPlate}
-          onChange={(event) => setGtText(event.target.value.toUpperCase())}
-          placeholder={isNoPlate ? "Xe không biển — không cần điền số" : "Nhập biển số đúng"}
-          value={isNoPlate ? "" : gtText}
-        />
-      </label>
-      <label>
-        Mức độ nhận diện (nhìn ảnh crop)
-        <select onChange={(event) => setQuality(event.target.value)} value={quality}>
-          <option value="">— Chọn mức —</option>
-          {QUALITY_OPTIONS.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="gt-field-row">
+        <label>
+          Biển số đúng (GT)
+          <input
+            disabled={isNoPlate}
+            onChange={(event) => setGtText(event.target.value.toUpperCase())}
+            placeholder={isNoPlate ? "Xe không biển" : "Nhập biển số đúng"}
+            value={isNoPlate ? "" : gtText}
+          />
+        </label>
+        <label>
+          Mức độ nhận diện
+          <select onChange={(event) => setQuality(event.target.value)} value={quality}>
+            <option value="">— Chọn mức —</option>
+            {QUALITY_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
       {suspectNoPlate ? (
         <p className="quality-hint quality-hint-diff">
           ⚠ Nghi ngờ <strong>xe không biển</strong> (OCR đọc nhầm từ logo/tem dán). Đã chọn "Xe không

@@ -47,7 +47,7 @@ _COL = {header: index for index, (header, _) in enumerate(_COLUMNS, start=1)}
 
 # The 3-level "Mức độ nhận diện" (how readable the plate is) — filled by the AI/reviewer. Short
 # enough for an inline Excel dropdown.
-_RECOGNITION_OPTIONS = "Rõ,Khó đọc,Không đọc được,Xe không biển"
+_RECOGNITION_OPTIONS = "Đọc rõ,Khó đọc,Không đọc được,Xe không biển"
 
 # Fine defect taxonomy for the "Phân loại" column. These are a HUMAN judgement (glare/forged/deformed
 # cannot be auto-classified reliably), so the column is a BLANK dropdown the reviewer fills in Excel.

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { CondensedList } from "../components/CondensedList";
 import { Icon } from "../components/Icon";
 import {
   ConfirmDialog,
@@ -21,39 +22,23 @@ const scopeOptions: { key: Scope; label: string; icon: "video" | "motorcycle" | 
   { key: "car", label: "Ô tô", icon: "car" },
 ];
 
-const condenseLabels: Record<string, string> = {
-  completed: "Đã cắt",
-  processing: "Đang cắt",
-  scanning: "Đang cắt",
-  rendering: "Đang cắt",
-  queued: "Trong hàng đợi",
-  empty: "Không có xe",
-  failed: "Thất bại",
-};
-
-function condenseTone(status: string): "success" | "info" | "warning" | "danger" {
-  if (status === "completed") return "success";
-  if (status === "empty") return "warning";
-  if (status === "failed") return "danger";
-  return "info";
-}
-
 export function OverviewPage({
   jobs,
   onCreate,
   onDelete,
   onOpen,
-  onOpenCondense,
+  onSendCondenseToCreate,
 }: {
   jobs: Job[];
   onCreate: (scope: Scope) => void;
   onDelete: (job: Job) => Promise<void>;
   onOpen: (job: Job) => void;
-  onOpenCondense: () => void;
+  onSendCondenseToCreate: (item: CondenseStatus) => void;
 }) {
   const deletion = useJobDeletion(onDelete);
   const [scope, setScope] = useState<Scope>("video");
   const [condenseList, setCondenseList] = useState<CondenseStatus[]>([]);
+  const [condenseReload, setCondenseReload] = useState(0);
   const [page, setPage] = useState(1);
   const PER_PAGE = 4;
   // Reset to the first page whenever the user switches Video / Xe máy / Ô tô.
@@ -63,7 +48,7 @@ export function OverviewPage({
     api<CondenseStatus[]>("/api/v1/condense")
       .then(setCondenseList)
       .catch(() => setCondenseList([]));
-  }, []);
+  }, [condenseReload]);
 
   const isVideo = scope === "video";
   const scoped = isVideo ? jobs : jobs.filter((job) => job.vehicle_type === scope);
@@ -96,21 +81,19 @@ export function OverviewPage({
         { label: "Thời gian đã bỏ", value: formatTime(totalCutMs), icon: "check", tone: "green" },
       ]
     : [
-        { label: "Tổng job", value: scoped.length, icon: "layers", tone: "blue" },
+        { label: "Tổng số phiên", value: scoped.length, icon: "layers", tone: "blue" },
         { label: "Đang xử lý", value: processing, icon: "clock", tone: "blue" },
         { label: "Chờ kiểm duyệt", value: review, icon: "shield", tone: "orange" },
         { label: "Đã hoàn thành", value: completed, icon: "check", tone: "green" },
       ];
 
+  // Pagination here is only for the job tables (Xe máy / Ô tô); the Video tab uses CondensedList,
+  // which paginates itself.
   const jobPageCount = Math.max(1, Math.ceil(scoped.length / PER_PAGE));
-  const condensePageCount = Math.max(1, Math.ceil(condenseList.length / PER_PAGE));
   const pagedJobs = scoped.slice((page - 1) * PER_PAGE, page * PER_PAGE);
-  const pagedCondense = condenseList.slice((page - 1) * PER_PAGE, page * PER_PAGE);
-  // Keep the page valid when a delete shrinks the current list.
-  const activePageCount = isVideo ? condensePageCount : jobPageCount;
   useEffect(() => {
-    if (page > activePageCount) setPage(activePageCount);
-  }, [page, activePageCount]);
+    if (page > jobPageCount) setPage(jobPageCount);
+  }, [page, jobPageCount]);
 
   const pagination = (pageCount: number) => (
       <div className="pagination pagination-end">
@@ -152,10 +135,10 @@ export function OverviewPage({
             type="button"
           >
             <Icon name={isVideo ? "scissors" : "plus"} size={19} />{" "}
-            {isVideo ? "Cắt video mới" : "Tạo job mới"}
+            {isVideo ? "Cắt video mới" : "Tạo phiên mới"}
           </button>
         }
-        description="Theo dõi tiến độ xử lý video và các job đang chờ kiểm duyệt."
+        description="Theo dõi tiến độ xử lý video và các phiên đang chờ kiểm duyệt."
         title="Tổng quan Ground Truth"
       />
 
@@ -203,75 +186,19 @@ export function OverviewPage({
             </header>
             {condenseList.length === 0 ? (
               <EmptyState
-                description="Vào mục Cắt video để loại bỏ các đoạn không có phương tiện và gộp các lượt xe."
-                title="Chưa có video cắt"
+                description="Nhấn “Cắt video mới” ở góc trên để bắt đầu."
+                title="Chưa có video đã cắt"
               />
             ) : (
-              <div className="data-table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Tên video</th>
-                      <th>Gốc → Sau</th>
-                      <th>Đã bỏ</th>
-                      <th>Số đoạn</th>
-                      <th>Trạng thái</th>
-                      <th aria-label="Thao tác" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pagedCondense.map((item) => (
-                      <tr
-                        className="clickable-row"
-                        key={item.id}
-                        onClick={onOpenCondense}
-                        title={
-                          item.status === "completed"
-                            ? "Mở trang Cắt video"
-                            : "Đang cắt — mở để xem tiến trình"
-                        }
-                      >
-                        <td>
-                          <div className="file-cell">
-                            <Icon name="scissors" size={18} />
-                            <div>
-                              <strong title={item.source_name ?? ""}>
-                                {item.source_name ?? "—"}
-                              </strong>
-                              <small>Bỏ trống &gt; {item.min_gap_seconds ?? "?"}s</small>
-                            </div>
-                          </div>
-                        </td>
-                        <td>
-                          {item.source_duration_ms != null && item.condensed_duration_ms != null
-                            ? `${formatTime(item.source_duration_ms)} → ${formatTime(item.condensed_duration_ms)}`
-                            : "—"}
-                        </td>
-                        <td>{item.cut_ms != null ? formatTime(item.cut_ms) : "—"}</td>
-                        <td>{item.segment_count ?? "—"}</td>
-                        <td>
-                          <StatusBadge tone={condenseTone(item.status)}>
-                            {condenseLabels[item.status] ?? item.status}
-                          </StatusBadge>
-                        </td>
-                        <td className="row-action-cell">
-                          {item.status === "completed" && (
-                            <a
-                              aria-label={`Tải ${item.source_name ?? "video"}`}
-                              className="icon-button"
-                              href={`/api/v1/condense/${item.id}/download`}
-                              onClick={(event) => event.stopPropagation()}
-                              title="Tải video đã cắt"
-                            >
-                              <Icon name="download" size={17} />
-                            </a>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {pagination(condensePageCount)}
+              <div className="overview-condensed">
+                {/* Reuse the same list as the Cắt video page → clicking a row opens the detail
+                    popup (xem lại video, tải, xoá, chuyển sang tạo GT), not just a page jump. */}
+                <CondensedList
+                  mode="manage"
+                  onDeleted={() => setCondenseReload((value) => value + 1)}
+                  onSendToGt={onSendCondenseToCreate}
+                  reloadKey={condenseReload}
+                />
               </div>
             )}
           </section>
@@ -308,23 +235,14 @@ export function OverviewPage({
           <section className="card table-card">
             <header>
               <div>
-                <h2>Job gần đây</h2>
+                <h2>Phiên gần đây</h2>
                 <p>Dữ liệu cập nhật trực tiếp từ hệ thống xử lý.</p>
               </div>
             </header>
             {scoped.length === 0 ? (
               <EmptyState
-                action={
-                  <button
-                    className="button button-primary"
-                    onClick={() => onCreate(scope)}
-                    type="button"
-                  >
-                    Tạo job đầu tiên
-                  </button>
-                }
-                description="Chọn một video qua trạm để bắt đầu."
-                title="Chưa có job"
+                description="Nhấn “Tạo phiên mới” ở góc trên để bắt đầu."
+                title="Chưa có phiên xử lý"
               />
             ) : (
               <div className="data-table-wrap">
@@ -372,7 +290,7 @@ export function OverviewPage({
                               event.stopPropagation();
                               deletion.request(job);
                             }}
-                            title="Xóa job"
+                            title="Xóa phiên"
                             type="button"
                           >
                             <Icon name="trash" size={17} />
@@ -393,7 +311,7 @@ export function OverviewPage({
         busy={deletion.busy}
         description={
           <>
-            Xóa job <strong>{deletion.pending?.source_name}</strong>? Toàn bộ dữ liệu và bằng
+            Xóa phiên <strong>{deletion.pending?.source_name}</strong>? Toàn bộ dữ liệu và bằng
             chứng sẽ bị xóa vĩnh viễn, không thể hoàn tác.
             {deletion.error && <span className="modal-error">{deletion.error}</span>}
           </>
@@ -401,7 +319,7 @@ export function OverviewPage({
         onCancel={deletion.cancel}
         onConfirm={deletion.confirm}
         open={deletion.pending !== null}
-        title="Xóa job này?"
+        title="Xóa phiên này?"
       />
     </section>
   );

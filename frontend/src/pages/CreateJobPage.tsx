@@ -169,25 +169,6 @@ export function CreateJobPage({
     return created;
   }
 
-  async function saveDraft() {
-    if (!hasSource || busyAction) return;
-    setBusyAction("draft");
-    setMessage(null);
-    try {
-      const saved = draft ?? (await createDraft());
-      setMessage({
-        tone: "success",
-        text: `Đã lưu bản nháp ${saved.job_code}. Video chưa được đưa vào hàng đợi xử lý.`,
-      });
-    } catch (reason) {
-      setMessage({
-        tone: "error",
-        text: reason instanceof Error ? reason.message : "Không thể lưu bản nháp.",
-      });
-    } finally {
-      setBusyAction(null);
-    }
-  }
 
   async function start() {
     if (!hasSource || busyAction) return;
@@ -219,7 +200,7 @@ export function CreateJobPage({
     <section className="page create-page">
       <PageHeader
         description="Tải video lên để nhận diện phương tiện, biển số và tạo dữ liệu Ground Truth có thể truy vết."
-        title="Tạo job xử lý mới"
+        title="Tạo phiên xử lý mới"
       />
 
       <div className="create-grid">
@@ -229,7 +210,7 @@ export function CreateJobPage({
               <span>1</span>
               <div>
                 <h2>Dữ liệu đầu vào</h2>
-                <p>Hiện hệ thống xử lý một video cho mỗi job.</p>
+                <p>Hiện hệ thống xử lý một video cho mỗi phiên.</p>
               </div>
             </header>
 
@@ -254,7 +235,7 @@ export function CreateJobPage({
               </button>
             </div>
 
-            {sourceMode === "new" && (
+            {sourceMode === "new" && !file && (
               <div
                 className={`upload-dropzone ${dragging ? "dragging" : ""}`}
                 onClick={() => inputRef.current?.click()}
@@ -289,13 +270,13 @@ export function CreateJobPage({
               <CondensedList
                 mode="pick"
                 onPick={pickCondensed}
+                perPage={3}
                 picking={Boolean(busyAction)}
               />
             )}
 
             {hasSource && (
               <div className="selected-file">
-                {preview && <video muted preload="metadata" src={preview} />}
                 <div className="selected-file-copy">
                   <strong title={file ? file.name : condensedPick?.source_name ?? undefined}>
                     {file ? file.name : condensedPick?.source_name ?? "Video đã cắt"}
@@ -350,6 +331,9 @@ export function CreateJobPage({
                 >
                   {file ? "Đổi tệp khác" : "Chọn video khác"}
                 </button>
+                {/* Input lives here too: the dropzone (which held the original) is hidden once a
+                    file is picked, so "Đổi tệp khác" needs its own to reopen the picker. */}
+                <input accept="video/*,.mkv,.m4v" onChange={chooseFile} ref={inputRef} type="file" />
               </div>
             )}
           </section>
@@ -403,7 +387,8 @@ export function CreateJobPage({
                 <p>Khoanh đúng làn để pipeline không bắt nhầm sang làn khác / nền / đèn.</p>
               </div>
               {preview ? (
-                <>
+                <div className="roi-config-body">
+                  <div className="roi-config-preview">
                   <div
                     className="roi-stage"
                     onPointerDown={roiDown}
@@ -425,23 +410,24 @@ export function CreateJobPage({
                     )}
                     <span className="roi-hint">Kéo chuột để khoanh vùng quét</span>
                   </div>
-                  <label className="roi-seek">
-                    <span>Thời điểm ảnh nền</span>
-                    <input
-                      aria-label="Thời điểm ảnh nền"
-                      defaultValue={0}
-                      max={100}
-                      min={0}
-                      onChange={(event) => {
-                        const video = roiVideoRef.current;
-                        if (video && video.duration) {
-                          video.currentTime = (Number(event.target.value) / 100) * video.duration;
-                        }
-                      }}
-                      type="range"
-                    />
-                  </label>
+                  </div>
                   <div className="roi-controls">
+                    <label className="roi-seek">
+                      <span>Thời điểm ảnh nền</span>
+                      <input
+                        aria-label="Thời điểm ảnh nền"
+                        defaultValue={0}
+                        max={100}
+                        min={0}
+                        onChange={(event) => {
+                          const video = roiVideoRef.current;
+                          if (video && video.duration) {
+                            video.currentTime = (Number(event.target.value) / 100) * video.duration;
+                          }
+                        }}
+                        type="range"
+                      />
+                    </label>
                     <label>
                       <span>Hướng làn</span>
                       <select
@@ -478,19 +464,18 @@ export function CreateJobPage({
                       )}
                     </div>
                   </div>
-                </>
+                </div>
               ) : (
                 <p className="roi-empty">Chọn video ở bước 1 để vẽ vùng quét.</p>
               )}
             </div>
           </section>
 
-          <section className="card form-card">
+          <section className="card form-card config-card">
             <header className="section-heading">
               <span>3</span>
               <div>
                 <h2>Cấu hình xử lý</h2>
-                <p>Hiện hệ thống chạy chế độ cân bằng giữa độ chính xác và tốc độ.</p>
               </div>
             </header>
 
@@ -519,19 +504,8 @@ export function CreateJobPage({
           </section>
 
           <section className="card action-footer">
-            <p>
-              Bước này chỉ tạo kết quả model kèm bằng chứng. GT chính thức cần qua bước kiểm duyệt
-              trước khi xuất.
-            </p>
+            <p>Kết quả bước này là dự đoán của model; GT chính thức có sau khi kiểm duyệt.</p>
             <div>
-              <button
-                className="button button-secondary"
-                disabled={!hasSource || Boolean(busyAction)}
-                onClick={saveDraft}
-                type="button"
-              >
-                {busyAction === "draft" ? "Đang lưu…" : "Lưu nháp"}
-              </button>
               <button
                 className="button button-primary"
                 disabled={!hasSource || Boolean(busyAction)}
@@ -557,7 +531,7 @@ export function CreateJobPage({
         </div>
 
         <aside className="card job-summary">
-          <h2>Tóm tắt job</h2>
+          <h2>Tóm tắt phiên</h2>
           <dl>
             <div>
               <dt>

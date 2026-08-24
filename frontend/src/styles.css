@@ -660,6 +660,17 @@ code {
   border-radius: 11px;
 }
 
+/* Small thumbnail for the picked video (Tạo phiên page still shows one). Without this the raw
+   <video> renders at its native size and blows up the layout. */
+.selected-file video {
+  flex: none;
+  width: 132px;
+  height: 74px;
+  border-radius: 8px;
+  background: #0e1b26;
+  object-fit: cover;
+}
+
 .selected-file-copy {
   display: flex;
   flex: 1;
@@ -758,8 +769,9 @@ code {
 
 .readonly-fields > label,
 .sample-rate-row label {
-  display: grid;
-  gap: 7px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   color: var(--navy);
   font-size: 11px;
   font-weight: 700;
@@ -792,10 +804,29 @@ code {
 
 .sample-rate-row {
   display: flex;
-  align-items: end;
-  justify-content: space-between;
+  align-items: center;
+  justify-content: flex-start;
   gap: 20px;
-  margin-top: 20px;
+  margin-top: 6px;
+}
+
+/* Step 3 has only one control — put the heading and the field on the SAME row so the card is one
+   line tall and the wide right-hand whitespace is used instead of wasted. */
+.config-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 20px;
+  padding: 16px 22px;
+}
+
+.config-card .section-heading {
+  margin: 0;
+}
+
+.config-card .sample-rate-row {
+  margin: 0;
 }
 
 .sample-rate-row label > div {
@@ -1150,9 +1181,11 @@ code {
 .track-popup-crop {
   display: block;
   width: 100%;
+  max-height: 300px;
   margin-bottom: 10px;
   border-radius: 7px;
   background: #0a1621;
+  object-fit: contain;
 }
 
 .track-popup-meta {
@@ -1173,6 +1206,22 @@ code {
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
+}
+
+/* Stack multiple corner toasts vertically (top-right) instead of letting them overlap. */
+.toast-stack {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.toast-stack .toast-corner {
+  position: static;
 }
 
 /* Transient corner popup (top-right), auto-dismisses after a few seconds or via the X. */
@@ -1227,44 +1276,49 @@ code {
   padding: 12px 20px;
   border-radius: 999px;
   font-size: 14px;
+  opacity: 0.9;
   box-shadow: 0 12px 28px rgba(20, 25, 40, 0.28);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease,
+    box-shadow 0.2s ease;
 }
 
 .export-fab:hover {
+  opacity: 1;
+  transform: translateY(-2px);
   box-shadow: 0 16px 34px rgba(20, 25, 40, 0.34);
 }
 
 /* When every case is handled (Cần xử lý = 0), wiggle periodically to nudge the user to export. */
+/* Everything reviewed → make it POP with a pulsing glow ring + gentle grow (not a jittery shake). */
 .export-fab-ready {
-  animation: fab-wiggle 2.4s ease-in-out infinite;
+  opacity: 1;
+  animation: fab-ready 1.8s ease-in-out infinite;
 }
 
-@keyframes fab-wiggle {
+@keyframes fab-ready {
   0%,
-  82%,
   100% {
-    transform: translateX(0) rotate(0);
+    transform: scale(1);
+    box-shadow:
+      0 12px 28px rgba(20, 25, 40, 0.28),
+      0 0 0 0 rgba(120, 190, 30, 0.55);
   }
-  85% {
-    transform: translateX(-3px) rotate(-3deg);
-  }
-  88% {
-    transform: translateX(3px) rotate(3deg);
-  }
-  91% {
-    transform: translateX(-2px) rotate(-2deg);
-  }
-  94% {
-    transform: translateX(2px) rotate(2deg);
-  }
-  97% {
-    transform: translateX(0) rotate(0);
+  50% {
+    transform: scale(1.06);
+    box-shadow:
+      0 14px 30px rgba(20, 25, 40, 0.3),
+      0 0 0 14px rgba(120, 190, 30, 0);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .export-fab-ready {
     animation: none;
+    box-shadow:
+      0 12px 28px rgba(20, 25, 40, 0.28),
+      0 0 0 4px rgba(120, 190, 30, 0.5);
   }
 }
 
@@ -1435,6 +1489,11 @@ code {
    it wins over the base `.overview-grid` two-column rule regardless of source order. */
 .overview-grid.overview-grid-full {
   grid-template-columns: 1fr;
+}
+
+/* The shared CondensedList sits inside the Overview "Video đã cắt" card. */
+.overview-condensed {
+  padding: 10px 14px 6px;
 }
 
 .kpi-icon {
@@ -1823,7 +1882,7 @@ code {
 .evidence-video video {
   display: block;
   width: 100%;
-  max-height: 340px;
+  max-height: 360px;
   margin: 0 auto;
   border-radius: 10px;
   background: #000000;
@@ -3155,7 +3214,7 @@ code {
 }
 
 .pipeline-card {
-  padding: 22px;
+  padding: 16px 18px;
   border-left: 1px solid var(--border);
 }
 
@@ -3182,7 +3241,7 @@ code {
 }
 
 .pipeline-list {
-  margin: 20px 0;
+  margin: 12px 0;
   padding: 0;
   list-style: none;
 }
@@ -3192,7 +3251,7 @@ code {
   grid-template-columns: 32px minmax(0, 1fr);
   align-items: center;
   gap: 11px;
-  min-height: 62px;
+  min-height: 46px;
   border-bottom: 1px solid #e7eef3;
   color: #8696a2;
 }
@@ -3241,7 +3300,7 @@ code {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
-  margin: 0 0 18px;
+  margin: 0 0 12px;
 }
 
 .pipeline-facts > div {
@@ -3376,14 +3435,20 @@ code {
 .review-grid {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr) 380px;
+  /* All three columns share ONE height (the tallest content) and each fills it gracefully: the list
+     stretches + scrolls, the evidence media centers, the review nav pins to the bottom. When panels
+     collapse/expand the tallest shrinks and the others follow — the three bottoms stay aligned. */
   align-items: stretch;
   gap: 12px;
   max-width: 1500px;
-  min-height: calc(100vh - 230px);
   margin: 0 auto;
+  /* Bottom gutter so the floating "Xuất Excel" button never covers the last row (record nav). */
+  padding-bottom: 72px;
 }
 
 .track-panel {
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -3420,7 +3485,11 @@ code {
 
 .track-list {
   display: grid;
-  max-height: calc(100vh - 300px);
+  align-content: start;
+  /* Fills the shared column height and scrolls when there are more cases than fit — this is what
+     "kéo dài" the left block so it ends level with the other two. */
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 7px;
   gap: 5px;
@@ -3503,11 +3572,21 @@ code {
   padding: 11px;
 }
 
+/* Holds the image/video between the tabs and the footer. Grows to fill the shared column height and
+   centers the media, so the evidence block matches the other two columns without stretching the
+   aspect-locked frame (its bbox overlays must keep the image's ratio). */
+.evidence-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
 .evidence-tabs {
   display: flex;
   align-items: center;
   min-height: 38px;
-  border-bottom: 1px solid var(--border);
 }
 
 .evidence-tabs button {
@@ -3539,13 +3618,27 @@ code {
 .full-frame {
   position: relative;
   overflow: hidden;
+  cursor: crosshair;
   /* Fallback ratio; the real frame ratio is set inline from job.width/height so the box matches the
      image exactly — no letterbox black bars, and the bbox overlays stay aligned. */
   aspect-ratio: 16 / 9;
-  max-height: 340px;
-  margin: 10px auto 0;
+  max-height: 380px;
+  margin: 0 auto;
   border-radius: 9px;
   background: #0a1621;
+}
+
+/* Magnifier loupe following the cursor — read hard plates up close without leaving the page. */
+.frame-loupe {
+  position: absolute;
+  width: 176px;
+  height: 176px;
+  border-radius: 50%;
+  border: 2px solid rgba(20, 30, 40, 0.5);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  background-repeat: no-repeat;
+  pointer-events: none;
+  z-index: 6;
 }
 
 .full-frame > img {
@@ -3665,7 +3758,6 @@ code {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  margin-top: auto;
   padding-top: 11px;
   color: var(--muted);
   font-size: 8px;
@@ -3897,6 +3989,13 @@ code {
   gap: 10px;
 }
 
+/* GT plate + recognition level share one row to save vertical space in the review pane. */
+.gt-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+
 .ground-truth-section label {
   display: grid;
   gap: 5px;
@@ -3913,8 +4012,9 @@ code {
   padding: 8px 9px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: #f5f7f8;
-  color: #81909b;
+  background: #fff;
+  color: #16212c;
+  font-weight: 600;
   font-size: 8px;
 }
 
@@ -3926,6 +4026,8 @@ code {
 .review-navigation {
   display: flex;
   gap: 7px;
+  /* Pins the record nav to the bottom of the review column so its bottom lines up with the list and
+     evidence columns. */
   margin-top: auto;
   padding: 12px 14px;
   border-top: 1px solid var(--border);
@@ -4384,6 +4486,33 @@ code {
 
 .vehicle-type-grid {
   grid-template-columns: repeat(2, 1fr);
+}
+
+/* Compact the vehicle-type cards + shrink the ROI preview on the Tạo phiên page to save space. */
+.vehicle-type-grid .selection-card {
+  min-height: 88px;
+  padding: 12px 14px;
+}
+
+/* ROI section: video (+ background-frame seek) on the left, lane controls on the right — fills the
+   full width so the preview lines up with the cards above instead of floating narrow/left. */
+.roi-config-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+  align-items: start;
+  gap: 18px;
+}
+
+.roi-config-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.roi-config-body .roi-controls {
+  flex-direction: column;
+  align-items: stretch;
 }
 
 button.selection-card {

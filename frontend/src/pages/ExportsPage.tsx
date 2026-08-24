@@ -78,7 +78,7 @@ export function ExportsPage({
   return (
     <section className="page exports-page">
       <PageHeader
-        description={`${jobs.filter(isReadyForReview).length} job có kết quả model sẵn sàng tải xuống.`}
+        description={`${jobs.filter(isReadyForReview).length} phiên có kết quả model sẵn sàng tải xuống.`}
         title="Kết quả & Xuất GT"
       />
 
@@ -88,7 +88,7 @@ export function ExportsPage({
             <Icon name="search" size={18} />
             <input
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Tìm tên job hoặc mã job…"
+              placeholder="Tìm tên hoặc mã phiên…"
               value={query}
             />
           </label>
@@ -144,13 +144,13 @@ export function ExportsPage({
         </header>
         {jobs.length === 0 ? (
           <EmptyState
-            description="Kết quả sẽ xuất hiện sau khi một job được tạo."
+            description="Kết quả sẽ xuất hiện sau khi một phiên được tạo."
             title="Chưa có kết quả"
           />
         ) : filtered.length === 0 ? (
           <EmptyState
             description="Thử đổi bộ lọc hoặc từ khóa tìm kiếm khác."
-            title="Không có job khớp"
+            title="Không có phiên khớp"
           />
         ) : (
           <div className="data-table-wrap">
@@ -198,7 +198,7 @@ export function ExportsPage({
                         <a
                           className="button button-primary button-compact export-btn"
                           href={`/api/v1/jobs/${job.id}/export.xlsx`}
-                          title="Xuất trạng thái GT hiện tại của job (mọi lượt xe, kèm GT + mức độ nhận diện đã điền tới giờ)"
+                          title="Xuất trạng thái GT hiện tại của phiên (mọi lượt xe, kèm GT + mức độ nhận diện đã điền tới giờ)"
                         >
                           <Icon name="download" size={16} /> Xuất Excel
                         </a>
@@ -238,7 +238,7 @@ export function ExportsPage({
                           aria-label={`Xóa ${job.source_name}`}
                           className="icon-button icon-button-danger"
                           onClick={() => deletion.request(job)}
-                          title="Xóa job"
+                          title="Xóa phiên"
                           type="button"
                         >
                           <Icon name="trash" size={17} />
@@ -286,7 +286,7 @@ export function ExportsPage({
         busy={deletion.busy}
         description={
           <>
-            Xóa job <strong>{deletion.pending?.source_name}</strong>? Toàn bộ dữ liệu và bằng
+            Xóa phiên <strong>{deletion.pending?.source_name}</strong>? Toàn bộ dữ liệu và bằng
             chứng sẽ bị xóa vĩnh viễn, không thể hoàn tác.
             {deletion.error && <span className="modal-error">{deletion.error}</span>}
           </>
@@ -294,7 +294,7 @@ export function ExportsPage({
         onCancel={deletion.cancel}
         onConfirm={deletion.confirm}
         open={deletion.pending !== null}
-        title="Xóa job này?"
+        title="Xóa phiên này?"
       />
     </section>
   );

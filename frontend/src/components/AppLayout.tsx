@@ -6,7 +6,7 @@ import { Icon } from "./Icon";
 
 const viewLabels: Record<View, string> = {
   overview: "Tổng quan",
-  create: "Tạo job",
+  create: "Tạo phiên",
   processing: "Đang xử lý",
   review: "Kiểm duyệt GT",
   exports: "Kết quả & Xuất GT",
@@ -39,7 +39,7 @@ type NavItem = {
 
 const navigation: NavItem[] = [
   { view: "overview", label: "Tổng quan", icon: "grid" },
-  { view: "create", label: "Tạo job", icon: "plus" },
+  { view: "create", label: "Tạo phiên", icon: "plus" },
   { view: "condense", label: "Cắt video", icon: "scissors" },
   { view: "review", label: "Kiểm duyệt GT", icon: "shield" },
   { view: "exports", label: "Kết quả & Xuất GT", icon: "download" },

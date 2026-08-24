@@ -32,6 +32,7 @@ export function CondensedList({
   onDeleted,
   picking = false,
   reloadKey = 0,
+  perPage = 4,
 }: {
   mode: "manage" | "pick";
   onPick?: (item: CondenseStatus) => void;
@@ -39,13 +40,14 @@ export function CondensedList({
   onDeleted?: (id: string) => void;
   picking?: boolean;
   reloadKey?: number;
+  perPage?: number;
 }) {
   const [items, setItems] = useState<CondenseStatus[] | null>(null);
   const [reload, setReload] = useState(0);
   const [openId, setOpenId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<CondenseStatus | null>(null);
   const [page, setPage] = useState(1);
-  const PER_PAGE = 4;
+  const PER_PAGE = perPage;
 
   useEffect(() => {
     let active = true;
@@ -121,9 +123,19 @@ export function CondensedList({
                   · bỏ {formatTime(item.cut_ms ?? 0)} · {item.segment_count ?? 0} đoạn
                 </small>
               </div>
-              <Icon name={mode === "pick" ? "arrow" : "eye"} size={16} />
             </button>
-            {mode === "manage" && (
+            {mode === "pick" ? (
+              <button
+                aria-label={`Xem trước ${item.source_name ?? "video"}`}
+                className="icon-button"
+                disabled={picking}
+                onClick={() => setOpenId(item.id)}
+                title="Xem trước video này"
+                type="button"
+              >
+                <Icon name="eye" size={18} />
+              </button>
+            ) : (
               <button
                 aria-label={`Xoá ${item.source_name ?? "video"}`}
                 className="icon-button icon-button-danger"
@@ -217,6 +229,18 @@ export function CondensedList({
             </div>
 
             <div className="condense-actions">
+              {mode === "pick" && (
+                <button
+                  className="button button-primary"
+                  onClick={() => {
+                    onPick?.(open);
+                    setOpenId(null);
+                  }}
+                  type="button"
+                >
+                  <Icon name="check" size={18} /> Chọn video này
+                </button>
+              )}
               {onSendToGt && (
                 <button
                   className="button button-primary"
@@ -230,13 +254,15 @@ export function CondensedList({
               <a className="button button-secondary" href={`/api/v1/condense/${open.id}/download`}>
                 <Icon name="download" size={18} /> Tải video
               </a>
-              <button
-                className="button button-danger"
-                onClick={() => setConfirmDelete(open)}
-                type="button"
-              >
-                <Icon name="trash" size={17} /> Xoá
-              </button>
+              {mode === "manage" && (
+                <button
+                  className="button button-danger"
+                  onClick={() => setConfirmDelete(open)}
+                  type="button"
+                >
+                  <Icon name="trash" size={17} /> Xoá
+                </button>
+              )}
             </div>
           </div>
         </div>
