@@ -265,7 +265,6 @@ export function OverviewPage({
                             <Icon name="file" size={18} />
                             <div>
                               <strong title={job.source_name}>{job.source_name}</strong>
-                              <small>{job.job_code}</small>
                             </div>
                           </div>
                         </td>

@@ -101,6 +101,18 @@ export default function App() {
     setSelectedJob((current) => (current?.id === updated.id ? updated : current));
   }, []);
 
+  const renameJob = useCallback(async (job: Job, source_name: string) => {
+    const updated = await api<Job>(`/api/v1/jobs/${job.id}/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source_name }),
+    });
+    setJobs((current) =>
+      current.map((candidate) => (candidate.id === updated.id ? updated : candidate)),
+    );
+    setSelectedJob((current) => (current?.id === updated.id ? updated : current));
+  }, []);
+
   function openJob(job: Job) {
     setSelectedJob(job);
     setView(isReadyForReview(job) ? "review" : "processing");
@@ -188,10 +200,16 @@ export default function App() {
       />
     );
   } else if (view === "review" && selectedJob) {
-    content = <ReviewPage job={selectedJob} key={selectedJob.id} />;
+    content = <ReviewPage job={selectedJob} key={selectedJob.id} onRename={renameJob} />;
   } else if (view === "exports") {
     content = (
-      <ExportsPage jobs={jobs} onDelete={deleteJob} onFlag={flagJob} onOpen={openJob} />
+      <ExportsPage
+        jobs={jobs}
+        onDelete={deleteJob}
+        onFlag={flagJob}
+        onOpen={openJob}
+        onRename={renameJob}
+      />
     );
   } else if (view === "condense") {
     content = (

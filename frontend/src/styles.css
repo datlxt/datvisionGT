@@ -1582,6 +1582,10 @@ code {
   font-size: 15px;
 }
 
+.table-card .table-title-lg {
+  font-size: 19px;
+}
+
 .table-card header p {
   margin: 5px 0 0;
   color: var(--muted);
@@ -1798,9 +1802,9 @@ code {
 
 .review-eyebrow {
   display: block;
-  font-size: 11px;
+  font-size: 17px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
   color: #2b64c4;
 }
@@ -1809,7 +1813,7 @@ code {
   margin: 0;
   max-width: 60vw;
   overflow: hidden;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 700;
   color: var(--text);
   text-overflow: ellipsis;
@@ -1911,14 +1915,10 @@ code {
 
 .evidence-video video {
   display: block;
-  /* Capped by the leftover screen height so the timeline + legend + footer always show without a
-     scrollbar; keeps real aspect (no distortion, no black bars). It fills the width until the height
-     cap kicks in, then it just gets a small side gap. */
-  max-width: 100%;
-  max-height: calc(100vh - 350px);
-  width: auto;
+  /* Full column width (lines up with the timeline), height by real aspect — page scrolls as one so
+     no cap needed. */
+  width: 100%;
   height: auto;
-  margin: 0 auto;
   border-radius: 10px;
   background: #000000;
 }
@@ -3383,12 +3383,7 @@ code {
   /* Fixed to one screen (viewport minus the 48px topbar): the PAGE never scrolls — only the columns
      scroll inside themselves. Kills the dead bottom gutter and stops sibling columns from growing
      empty space when one panel expands. */
-  height: calc(100vh - 48px);
-  min-height: 0;
-  padding: 10px 16px;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  padding: 10px 16px 16px;
 }
 
 .review-toolbar {
@@ -3479,13 +3474,9 @@ code {
 .review-grid {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr) 380px;
-  /* Fills the space under the header and is the SCROLL BOUNDARY: the grid itself never scrolls
-     (overflow hidden), each column stretches to the full height and scrolls inside itself. So the
-     three bottoms always line up and expanding one panel never pushes the others. */
+  /* The whole grid grows with content and the PAGE scrolls as one block. All three columns stretch to
+     the tallest one so the three bottoms line up (the list fills down to match). */
   align-items: stretch;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
   gap: 12px;
   width: 100%;
   max-width: 1500px;
@@ -3532,11 +3523,9 @@ code {
 .track-list {
   display: grid;
   align-content: start;
-  /* Fills the shared column height and scrolls when there are more cases than fit — this is what
-     "kéo dài" the left block so it ends level with the other two. */
+  /* Fills the stretched column so the list block extends down level with the other two; the whole
+     page scrolls as one block when the cases are many. */
   flex: 1;
-  min-height: 0;
-  overflow-y: auto;
   padding: 7px;
   gap: 5px;
 }
@@ -3616,7 +3605,6 @@ code {
   min-width: 0;
   flex-direction: column;
   padding: 6px 11px 10px;
-  overflow: hidden;
 }
 
 /* Holds the image/video between the tabs and the footer. Top-aligned natural flow so the media keeps
@@ -3676,8 +3664,8 @@ code {
 /* Magnifier loupe following the cursor — read hard plates up close without leaving the page. */
 .frame-loupe {
   position: absolute;
-  width: 176px;
-  height: 176px;
+  width: 146px;
+  height: 146px;
   border-radius: 50%;
   border: 2px solid rgba(20, 30, 40, 0.5);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
@@ -3803,7 +3791,9 @@ code {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding-top: 6px;
+  /* Sits at the bottom of the stretched column so its bottom lines up with the list and review nav. */
+  margin-top: auto;
+  padding-top: 8px;
   color: var(--muted);
   font-size: 8px;
 }
@@ -3811,9 +3801,6 @@ code {
 .gt-panel {
   display: flex;
   flex-direction: column;
-  /* This column scrolls inside itself when the AI/note panels expand — it does NOT grow the page or
-     shove the other columns. */
-  overflow-y: auto;
 }
 
 .prediction-section,
@@ -3847,8 +3834,8 @@ code {
 
 .prediction-value {
   display: block;
-  margin: 14px 0;
-  font-size: 22px;
+  margin: 10px 0;
+  font-size: 19px;
   letter-spacing: 0.05em;
   overflow-wrap: anywhere;
 }
@@ -4077,7 +4064,6 @@ code {
      evidence columns. */
   margin-top: auto;
   padding: 12px 14px;
-  border-top: 1px solid var(--border);
 }
 
 .review-navigation button {
@@ -5104,4 +5090,127 @@ button.selection-card:hover:not(.selected) {
   .condense-stats strong {
     font-size: 19px;
   }
+}
+
+/* Rename-job: pencil trigger (review header + export list) + the dialog's input. */
+.rename-pencil {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.rename-pencil:hover {
+  background: var(--blue-light);
+  border-color: #b7d4f5;
+  color: var(--blue);
+}
+
+.table-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rename-form {
+  margin-top: 6px;
+  text-align: left;
+}
+
+.rename-input {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.rename-input:focus {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--blue-light);
+}
+
+.rename-meta {
+  display: flex;
+  justify-content: flex-end;
+  margin: 6px 2px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.rename-error {
+  color: #d1495b;
+  font-weight: 600;
+}
+
+/* "Danh sách kết quả" — title, search/filters and the table read as one clean block (no divider
+   hairlines). Balanced vertical rhythm + a filled search field + a crisp uppercase table header. */
+.exports-page .table-card > header {
+  border-bottom: none;
+  padding: 18px 22px 0;
+}
+
+.exports-inner-toolbar {
+  padding: 12px 22px 14px;
+}
+
+.exports-page .review-toolbar > label {
+  height: 42px;
+  background: #f6f9fc;
+  border-color: var(--border);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease;
+}
+
+.exports-page .review-toolbar > label:focus-within {
+  background: #fff;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--blue-light);
+}
+
+.exports-page .review-toolbar input {
+  font-size: 11.5px;
+}
+
+.exports-page .filter-tabs button {
+  min-height: 38px;
+  padding: 0 13px;
+  font-size: 10px;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.exports-page .filter-tabs button:hover {
+  border-color: #b7d4f5;
+  color: var(--blue);
+}
+
+.exports-page .export-table th {
+  height: 46px;
+  background: #f6f9fc;
+  color: #64758a;
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }

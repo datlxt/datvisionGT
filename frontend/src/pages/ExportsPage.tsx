@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { Icon } from "../components/Icon";
+import { RenameJobDialog } from "../components/RenameJobDialog";
 import {
   ConfirmDialog,
   EmptyState,
@@ -29,13 +30,16 @@ export function ExportsPage({
   onDelete,
   onFlag,
   onOpen,
+  onRename,
 }: {
   jobs: Job[];
   onDelete: (job: Job) => Promise<void>;
   onFlag: (job: Job, flagged: boolean) => Promise<void>;
   onOpen: (job: Job) => void;
+  onRename: (job: Job, name: string) => Promise<void>;
 }) {
   const deletion = useJobDeletion(onDelete);
+  const [renameTarget, setRenameTarget] = useState<Job | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ExportFilter>("ALL");
   const [vehicleFilter, setVehicleFilter] = useState<"all" | "motorcycle" | "car">("all");
@@ -82,66 +86,64 @@ export function ExportsPage({
         title="Kết quả & Xuất GT"
       />
 
-      {jobs.length > 0 && (
-        <div className="review-toolbar card">
-          <label>
-            <Icon name="search" size={18} />
-            <input
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Tìm tên hoặc mã phiên…"
-              value={query}
-            />
-          </label>
-          <div className="filter-groups">
-            <div className="filter-tabs">
-              {(
-                [
-                  ["ALL", "Tất cả"],
-                  ["READY", "Sẵn sàng"],
-                  ["PROCESSING", "Đang xử lý"],
-                  ["FAILED", "Lỗi"],
-                ] as [ExportFilter, string][]
-              ).map(([value, label]) => (
-                <button
-                  className={filter === value ? "active" : ""}
-                  key={value}
-                  onClick={() => setFilter(value)}
-                  type="button"
-                >
-                  {label} <span>{statusCount(value)}</span>
-                </button>
-              ))}
-            </div>
-            <div className="filter-tabs">
-              {(
-                [
-                  ["motorcycle", "Xe máy"],
-                  ["car", "Ô tô"],
-                ] as ["motorcycle" | "car", string][]
-              ).map(([value, label]) => (
-                <button
-                  className={vehicleFilter === value ? "active" : ""}
-                  key={value}
-                  onClick={() =>
-                    setVehicleFilter((current) => (current === value ? "all" : value))
-                  }
-                  type="button"
-                >
-                  {label} <span>{vehicleCount(value)}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
       <section className="card table-card">
         <header>
           <div>
-            <h2>Danh sách kết quả</h2>
-            <p>Trạng thái, tiến độ và nút xuất GT của từng job.</p>
+            <h2 className="table-title-lg">Danh sách kết quả</h2>
           </div>
         </header>
+        {jobs.length > 0 && (
+          <div className="review-toolbar exports-inner-toolbar">
+            <label>
+              <Icon name="search" size={18} />
+              <input
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Tìm tên hoặc mã phiên…"
+                value={query}
+              />
+            </label>
+            <div className="filter-groups">
+              <div className="filter-tabs">
+                {(
+                  [
+                    ["ALL", "Tất cả"],
+                    ["READY", "Sẵn sàng"],
+                    ["PROCESSING", "Đang xử lý"],
+                    ["FAILED", "Lỗi"],
+                  ] as [ExportFilter, string][]
+                ).map(([value, label]) => (
+                  <button
+                    className={filter === value ? "active" : ""}
+                    key={value}
+                    onClick={() => setFilter(value)}
+                    type="button"
+                  >
+                    {label} <span>{statusCount(value)}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="filter-tabs">
+                {(
+                  [
+                    ["motorcycle", "Xe máy"],
+                    ["car", "Ô tô"],
+                  ] as ["motorcycle" | "car", string][]
+                ).map(([value, label]) => (
+                  <button
+                    className={vehicleFilter === value ? "active" : ""}
+                    key={value}
+                    onClick={() =>
+                      setVehicleFilter((current) => (current === value ? "all" : value))
+                    }
+                    type="button"
+                  >
+                    {label} <span>{vehicleCount(value)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
         {jobs.length === 0 ? (
           <EmptyState
             description="Kết quả sẽ xuất hiện sau khi một phiên được tạo."
@@ -157,7 +159,7 @@ export function ExportsPage({
             <table className="data-table export-table">
               <thead>
                 <tr>
-                  <th>Tên dữ liệu</th>
+                  <th>Tên phiên</th>
                   <th>Loại xe</th>
                   <th>Tiến độ</th>
                   <th>Trạng thái</th>
@@ -171,10 +173,20 @@ export function ExportsPage({
                 {pageJobs.map((job) => (
                   <tr key={job.id}>
                     <td>
-                      <button className="table-link" onClick={() => onOpen(job)} type="button">
-                        <strong>{job.source_name}</strong>
-                        <small>{job.job_code}</small>
-                      </button>
+                      <div className="table-name-cell">
+                        <button className="table-link" onClick={() => onOpen(job)} type="button">
+                          <strong>{job.source_name}</strong>
+                        </button>
+                        <button
+                          aria-label={`Đổi tên ${job.source_name}`}
+                          className="rename-pencil"
+                          onClick={() => setRenameTarget(job)}
+                          title="Đổi tên phiên"
+                          type="button"
+                        >
+                          <Icon name="edit" size={15} />
+                        </button>
+                      </div>
                     </td>
                     <td>
                       <StatusBadge tone={job.vehicle_type === "car" ? "info" : "neutral"}>
@@ -295,6 +307,13 @@ export function ExportsPage({
         onConfirm={deletion.confirm}
         open={deletion.pending !== null}
         title="Xóa phiên này?"
+      />
+
+      <RenameJobDialog
+        initialName={renameTarget?.source_name ?? ""}
+        onClose={() => setRenameTarget(null)}
+        onSave={(name) => onRename(renameTarget!, name)}
+        open={renameTarget !== null}
       />
     </section>
   );

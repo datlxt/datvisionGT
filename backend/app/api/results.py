@@ -4,6 +4,7 @@ import csv
 import io
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -631,7 +632,7 @@ def export_gt_final(
     return StreamingResponse(
         iter([payload]),
         media_type=_XLSX_MEDIA_TYPE,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _content_disposition(filename)},
     )
 
 
@@ -696,7 +697,7 @@ def export_results_csv(
     return StreamingResponse(
         iter([output.getvalue().encode("utf-8")]),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _content_disposition(filename)},
     )
 
 
@@ -774,7 +775,7 @@ def export_results_xlsx(
     return StreamingResponse(
         iter([payload]),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _content_disposition(filename)},
     )
 
 
@@ -891,7 +892,17 @@ def dismiss_missed_candidate(
 
 
 def _path_safe(name: str) -> str:
+    # Keep Unicode letters/digits (isalnum() is Unicode-aware, so Vietnamese diacritics survive); drop
+    # the extension and replace anything else with "_".
     stem = name.rsplit(".", 1)[0]
     return "".join(
         character if character.isalnum() or character in "-_" else "_" for character in stem
-    )[:100]
+    )[:100] or "GT"
+
+
+def _content_disposition(filename: str) -> str:
+    """RFC 5987 header so a Vietnamese download name survives (a raw ``filename="ế…"`` would blow up
+    on the latin-1-only header, or arrive mangled). Includes an ASCII fallback for old clients."""
+
+    ascii_name = filename.encode("ascii", "ignore").decode("ascii") or "export"
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"

@@ -116,8 +116,13 @@ async def create_job(
     vehicle_type: str = "motorcycle",
 ) -> ProcessingJob:
     settings = get_settings()
-    filename = _safe_filename(unquote(filename_header))
-    extension = Path(filename).suffix.lower()
+    # Keep the ORIGINAL name (Vietnamese diacritics) for display, WITHOUT the video extension — a GT
+    # session isn't a file, so "Lane9_biến_xấu.mp4" shows as "Lane9_biến_xấu". Only the on-disk name is
+    # ASCII-sanitised (and keeps its extension).
+    raw_name = Path(unquote(filename_header)).name or "video.mp4"
+    extension = Path(raw_name).suffix.lower()
+    display_name = Path(raw_name).stem or "video"
+    filename = _safe_filename(raw_name)
     if extension not in VIDEO_EXTENSIONS:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Unsupported video format")
     if vehicle_type not in VEHICLE_TYPES:
@@ -157,7 +162,7 @@ async def create_job(
     created = datetime.now(UTC)
     job = ProcessingJob(
         job_code=f"JOB_{created:%Y%m%d_%H%M%S}_{str(upload_id)[:8].upper()}",
-        source_name=filename,
+        source_name=display_name,
         source_path=final_path.relative_to(settings.storage_root).as_posix(),
         source_hash=metadata.sha256,
         source_size_bytes=metadata.size_bytes,
@@ -233,7 +238,8 @@ def create_job_from_condense(
     if upload_json.is_file():
         upload_meta = json.loads(upload_json.read_text())
     source_stem = Path(upload_meta.get("source_name", "video.mp4")).stem
-    filename = _safe_filename(f"cut_{source_stem}.mp4")
+    display_name = f"cut_{source_stem}"  # display: Vietnamese diacritics, no extension
+    filename = _safe_filename(f"cut_{source_stem}.mp4")  # on-disk keeps .mp4
 
     upload_id = uuid.uuid4()
     upload_dir = settings.storage_root / "uploads" / str(upload_id)
@@ -245,7 +251,7 @@ def create_job_from_condense(
     created = datetime.now(UTC)
     job = ProcessingJob(
         job_code=f"JOB_{created:%Y%m%d_%H%M%S}_{str(upload_id)[:8].upper()}",
-        source_name=filename,
+        source_name=display_name,
         source_path=final_path.relative_to(settings.storage_root).as_posix(),
         source_hash=metadata.sha256,
         source_size_bytes=metadata.size_bytes,
@@ -488,6 +494,33 @@ def set_job_flag(
     config["flagged"] = payload.flagged
     job.config_snapshot = config
     flag_modified(job, "config_snapshot")
+    session.commit()
+    session.refresh(job)
+    return job
+
+
+class RenameRequest(BaseModel):
+    source_name: str
+
+
+@router.post("/{job_id}/rename", response_model=JobResponse)
+def rename_job(
+    job_id: uuid.UUID,
+    payload: RenameRequest,
+    session: Annotated[Session, Depends(get_db)],
+) -> ProcessingJob:
+    """Rename the DISPLAY name (``source_name``) shown in the UI / export. The on-disk file and path
+    are untouched; this is purely the human-facing label. Trimmed, non-empty, max 120 chars."""
+
+    job = session.get(ProcessingJob, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+    name = payload.source_name.strip()
+    if not name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Tên không được để trống.")
+    if len(name) > 30:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Tên tối đa 30 ký tự.")
+    job.source_name = name
     session.commit()
     session.refresh(job)
     return job

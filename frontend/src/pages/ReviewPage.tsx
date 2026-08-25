@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GtCompareDialog } from "../components/GtCompareDialog";
 import { Icon } from "../components/Icon";
 import { MissedCaseDialog } from "../components/MissedCaseDialog";
+import { RenameJobDialog } from "../components/RenameJobDialog";
 import {
   ConfirmDialog,
   EmptyState,
@@ -337,7 +338,14 @@ function toClock(ms: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-export function ReviewPage({ job }: { job: Job }) {
+export function ReviewPage({
+  job,
+  onRename,
+}: {
+  job: Job;
+  onRename: (job: Job, name: string) => Promise<void>;
+}) {
+  const [renaming, setRenaming] = useState(false);
   const [results, setResults] = useState<ResultList | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("ALL");
@@ -785,6 +793,14 @@ export function ReviewPage({ job }: { job: Job }) {
           <h1 className="review-filename" title={job.source_name}>
             {job.source_name}
           </h1>
+          <button
+            className="rename-pencil"
+            onClick={() => setRenaming(true)}
+            title="Đổi tên phiên"
+            type="button"
+          >
+            <Icon name="edit" size={16} />
+          </button>
         </div>
       </div>
       {/* Status cluster (left) sits on the SAME row as the action buttons (right) so the empty left
@@ -1222,7 +1238,7 @@ export function ReviewPage({ job }: { job: Job }) {
                 const mx = event.clientX - rect.left;
                 const my = event.clientY - rect.top;
                 const Z = 2.6;
-                const SIZE = 176;
+                const SIZE = 146;
                 setLoupe({
                   left: mx - SIZE / 2,
                   top: my - SIZE / 2,
@@ -1304,10 +1320,13 @@ export function ReviewPage({ job }: { job: Job }) {
                   </div>
                 )}
                 <div>
-                  <dt>Độ tin (đọc · biển · xe)</dt>
+                  <dt>Độ tin đọc biển</dt>
+                  <dd>{confidence(selected.confidence)}</dd>
+                </div>
+                <div>
+                  <dt>Độ tin phát hiện (biển / xe)</dt>
                   <dd>
-                    {confidence(selected.confidence)} · {confidence(selected.plate_confidence)} ·{" "}
-                    {confidence(selected.vehicle_confidence)}
+                    {confidence(selected.plate_confidence)} / {confidence(selected.vehicle_confidence)}
                   </dd>
                 </div>
               </dl>
@@ -1499,6 +1518,13 @@ export function ReviewPage({ job }: { job: Job }) {
           onClose={() => setShowMissed(false)}
         />
       )}
+
+      <RenameJobDialog
+        initialName={job.source_name}
+        onClose={() => setRenaming(false)}
+        onSave={(name) => onRename(job, name)}
+        open={renaming}
+      />
 
       <ConfirmDialog
         busy={gapBusy}
