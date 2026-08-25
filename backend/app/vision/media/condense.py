@@ -158,6 +158,8 @@ def render_condensed_video(
     written = 0
     with av.open(str(source_path)) as source:
         in_stream = source.streams.video[0]
+        # Multi-threaded decode — same frames out, just faster (no effect on which frames are kept).
+        in_stream.thread_type = "AUTO"
         time_base = in_stream.time_base
         origin_pts = in_stream.start_time
         fps = int(round(float(in_stream.average_rate or 25)))
@@ -168,6 +170,9 @@ def render_condensed_video(
             out_stream.height = in_stream.codec_context.height
             out_stream.pix_fmt = "yuv420p"
             out_stream.codec_context.time_base = frame_time_base
+            # A fast x264 preset (default is the much slower "medium") cuts encode time several-fold.
+            # The CUT is identical — only the review clip's compression changes, imperceptibly at crf 23.
+            out_stream.options = {"preset": "veryfast", "crf": "23"}
             for frame in source.decode(in_stream):
                 if frame.pts is None:
                     continue

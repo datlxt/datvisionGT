@@ -55,6 +55,9 @@ class PyAVVideoReader:
         path = source_path.resolve(strict=True)
         with av.open(str(path)) as container:
             stream = self._first_video_stream(container)
+            # Multi-threaded decode: identical frames in presentation order, just faster — speeds the
+            # condense scan and the main pipeline's frame extraction alike.
+            stream.thread_type = "AUTO"
             time_base = stream.time_base
             origin_pts = stream.start_time
             decoded_index = 0

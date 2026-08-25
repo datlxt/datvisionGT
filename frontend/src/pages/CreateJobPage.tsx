@@ -262,7 +262,7 @@ export function CreateJobPage({
                   <Icon name="upload" size={28} />
                 </span>
                 <strong>Kéo thả video vào đây hoặc nhấn để chọn</strong>
-                <p>MP4, AVI, MOV, MKV, M4V · Tối đa 2 GB</p>
+                <p>MP4, AVI, MOV, MKV, M4V · Tối đa 8 GB</p>
               </div>
             )}
 

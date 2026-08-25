@@ -6,7 +6,7 @@ import { Icon } from "./Icon";
 
 const viewLabels: Record<View, string> = {
   overview: "Tổng quan",
-  create: "Tạo phiên",
+  create: "Tạo phiên xử lý",
   processing: "Đang xử lý",
   review: "Kiểm duyệt GT",
   exports: "Kết quả & Xuất GT",
@@ -39,7 +39,7 @@ type NavItem = {
 
 const navigation: NavItem[] = [
   { view: "overview", label: "Tổng quan", icon: "grid" },
-  { view: "create", label: "Tạo phiên", icon: "plus" },
+  { view: "create", label: "Tạo phiên xử lý", icon: "plus" },
   { view: "condense", label: "Cắt video", icon: "scissors" },
   { view: "review", label: "Kiểm duyệt GT", icon: "shield" },
   { view: "exports", label: "Kết quả & Xuất GT", icon: "download" },
@@ -83,7 +83,6 @@ export function AppLayout({
           <span className={`service-dot ${health?.status === "ok" ? "online" : ""}`} />
           <div>
             <strong>{health?.status === "ok" ? "Hệ thống sẵn sàng" : "Đang kiểm tra hệ thống"}</strong>
-            <small>API · PostgreSQL · Redis</small>
           </div>
         </div>
       </aside>

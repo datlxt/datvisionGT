@@ -160,7 +160,10 @@ def _merge_persisted_motion_candidates(
     events: list[EventResult],
     *,
     max_gap_ms: int = 1_250,
-    no_plate_gap_ms: int = 14_000,
+    # Must match consolidate_vehicle_events.same_no_plate_gap_ms — the display layer re-runs the same
+    # no-plate consolidation, so a wider window here would silently RE-MERGE two distinct no-plate
+    # vehicles that the pipeline correctly kept separate (a bicycle and a YADEA e-bike ~5s apart).
+    no_plate_gap_ms: int = 4_000,
     min_no_plate_detections: int = 5,
     cross_plate_merge_gap_ms: int = 90_000,
 ) -> list[EventResult]:
@@ -200,15 +203,20 @@ def _merge_persisted_motion_candidates(
         # dropped just for passing within a few seconds of a plated vehicle (that silently lost real
         # "xe không biển" events). Overlap in time is still a fragment regardless (same moment = same
         # vehicle re-detected while the plated one is still there).
+        # A SUSTAINED no-plate track (>= 3 detections) is a REAL vehicle transiting the lane — a
+        # cloth-covered e-bike, a bicycle. It must NEVER be dropped just for sharing the gate with a
+        # plated vehicle (two vehicles at the barrier at once). Only a lone BLIP (<= 2 detections) is
+        # treated as the plated vehicle's own no-plate re-detection and dropped.
         blip = event.vehicle_detection_count <= 2
+        if not blip:
+            return False
         for pe in plated:
             overlaps = (
                 event.start_timestamp_ms <= pe.end_timestamp_ms
                 and event.end_timestamp_ms >= pe.start_timestamp_ms
             )
             near = (
-                blip
-                and event.start_timestamp_ms <= pe.end_timestamp_ms + no_plate_gap_ms
+                event.start_timestamp_ms <= pe.end_timestamp_ms + no_plate_gap_ms
                 and event.end_timestamp_ms >= pe.start_timestamp_ms - no_plate_gap_ms
             )
             if overlaps or near:

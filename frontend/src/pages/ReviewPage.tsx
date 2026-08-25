@@ -1,6 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { GtCompareDialog } from "../components/GtCompareDialog";
 import { Icon } from "../components/Icon";
 import { MissedCaseDialog } from "../components/MissedCaseDialog";
 import { RenameJobDialog } from "../components/RenameJobDialog";
@@ -47,6 +46,13 @@ const QUALITY_OPTIONS = [
   "Không đọc được",
   "Xe không biển",
 ];
+
+// Legacy label map: cross-checks run before the rename stored "Rõ"; show/seed it as "Đọc rõ" so the
+// pre-filled field and the suggestion line always agree.
+function normalizeQuality(label: string | null | undefined): string {
+  if (!label) return "";
+  return label === "Rõ" ? "Đọc rõ" : label;
+}
 
 // The "no plate" category + the sentinel GT string the backend/export expect for a plateless
 // vehicle (matches NO_PLATE_TEXT in backend export/plate_report.py).
@@ -117,7 +123,7 @@ function classificationLabel(event: EventResult): string {
     case "UNREADABLE":
       return "Không đọc được";
     case "NO_PLATE":
-      return "Không có biển";
+      return "Xe không biển";
     default:
       return "Cần xem lại";
   }
@@ -354,8 +360,9 @@ export function ReviewPage({
   const [reloadToken, setReloadToken] = useState(0);
   const [gt, setGt] = useState<GroundTruthList | null>(null);
   const [gtReload, setGtReload] = useState(0);
-  const [showCompare, setShowCompare] = useState(false);
   const [evidenceTab, setEvidenceTab] = useState<"frame" | "video">("frame");
+  // A crop the reviewer clicked to enlarge (lightbox). null = closed.
+  const [zoomCrop, setZoomCrop] = useState<string | null>(null);
   // Magnifier loupe over the full frame — follows the cursor so hard plates can be read closely.
   const [loupe, setLoupe] = useState<{
     left: number;
@@ -365,22 +372,6 @@ export function ReviewPage({
     bgW: number;
     bgH: number;
   } | null>(null);
-  const [hoverTrack, setHoverTrack] = useState<{
-    event: EventResult;
-    anchorY: number; // vertical CENTER of the hovered row — the popup is centered on this, then clamped
-    left: number;
-  } | null>(null);
-  const popupRef = useRef<HTMLDivElement>(null);
-  const [hoverTop, setHoverTop] = useState(0);
-  // Center the popup on the hovered row, then clamp so it never runs off the top/bottom of the
-  // screen — the last cases used to overflow because the popup was anchored at the row's TOP with a
-  // too-small height guess. Measured after render (and after the crop image loads) for exactness.
-  useLayoutEffect(() => {
-    if (!hoverTrack || !popupRef.current) return;
-    const height = popupRef.current.offsetHeight;
-    const top = Math.max(12, Math.min(hoverTrack.anchorY - height / 2, window.innerHeight - height - 12));
-    setHoverTop(top);
-  }, [hoverTrack]);
   // Success toast lives HERE (not in GtPanel): GtPanel remounts on save (its key changes), which
   // would drop a toast owned by it. This parent survives, so the confirmation actually shows.
   const [saveToast, setSaveToast] = useState<string | null>(null);
@@ -556,37 +547,44 @@ export function ReviewPage({
       inList?: boolean;
       plateElsewhereMs?: number | null;
     };
-    if (missedScan?.status === "done") {
-      return missedScan.candidates.map<Gap>((c) => ({
-        start: c.start_ms,
-        end: c.end_ms,
-        ts: c.ts_ms,
-        frameUrl: c.frame_url,
-        confirmed: true,
-        plate: c.plate,
-        hasPlate: c.has_plate,
-        vehicleType: c.vehicle_type,
-        inList: c.in_list,
-        plateElsewhereMs: c.plate_elsewhere_ms,
-      }));
-    }
-    // While the AI recall is queued/running (OR unavailable), show the RAW detection gaps as
-    // "chưa soi" markers so a reviewer can already cross-check them by hand in parallel — the bar
-    // must never go blank just because the AI hasn't answered yet. Once the AI is done we swap to
-    // its filtered candidates above.
+    // ALWAYS surface the raw detection gaps (empty stretches with no event) so the reviewer can verify
+    // EVERY one — the bar must never go blank just because the AI recall answered "no vehicle" / found
+    // nothing. When the AI is done we OVERLAY its findings: a gap where the AI saw a vehicle is
+    // upgraded to a confirmed candidate (with its frame + any plate); the rest stay as plain
+    // "chưa kiểm" stretches for a manual look. (Before the AI recall existed, this raw-gap bar was the
+    // whole feature — switching to AI-only silently hid gaps the AI wasn't sure about.)
+    const GAP_MIN = 6_000;
     const ordered = [...(results?.events ?? [])].sort(
       (a, b) => a.start_timestamp_ms - b.start_timestamp_ms,
     );
     const gaps: Gap[] = [];
     let cursor = 0;
     for (const event of ordered) {
-      if (event.start_timestamp_ms - cursor >= 6_000) {
+      if (event.start_timestamp_ms - cursor >= GAP_MIN) {
         gaps.push({ start: cursor, end: event.start_timestamp_ms, ts: cursor, confirmed: false });
       }
       cursor = Math.max(cursor, event.end_timestamp_ms);
     }
-    if (totalMs - cursor >= 6_000)
+    if (totalMs - cursor >= GAP_MIN) {
       gaps.push({ start: cursor, end: totalMs, ts: cursor, confirmed: false });
+    }
+    if (missedScan?.status === "done") {
+      for (const c of missedScan.candidates) {
+        const data = {
+          confirmed: true as const,
+          ts: c.ts_ms,
+          frameUrl: c.frame_url,
+          plate: c.plate,
+          hasPlate: c.has_plate,
+          vehicleType: c.vehicle_type,
+          inList: c.in_list,
+          plateElsewhereMs: c.plate_elsewhere_ms,
+        };
+        const hit = gaps.find((g) => c.start_ms <= g.end && c.end_ms >= g.start);
+        if (hit) Object.assign(hit, data);
+        else gaps.push({ start: c.start_ms, end: c.end_ms, ...data });
+      }
+    }
     return gaps;
   }, [missedScan, results, totalMs]);
 
@@ -739,6 +737,9 @@ export function ReviewPage({
     : -1;
   const selectedGt = selected ? gtByTrack.get(selected.track_id) ?? null : null;
   const selectedStartMs = selected?.start_timestamp_ms ?? 0;
+  const selectedCropUrl = selected
+    ? selected.plate_crop_url ?? selected.vehicle_crop_url ?? null
+    : null;
 
   // Seek only when the evidence view switches TO video, reading the latest selected start from
   // a ref. Keying the effect on `evidenceTab` alone (not selectedStartMs) stops it re-firing
@@ -878,14 +879,6 @@ export function ReviewPage({
         >
           <Icon name="plus" size={16} /> Bổ sung xe
         </button>
-        <button
-          className="button button-secondary button-compact"
-          onClick={() => setShowCompare(true)}
-          title="Đối chiếu với file GT có sẵn"
-          type="button"
-        >
-          <Icon name="upload" size={16} /> Đối chiếu GT
-        </button>
         {/* AI cross-check runs automatically after processing; this is a manual re-run fallback. */}
         <button
           className="button button-blue button-compact"
@@ -896,21 +889,6 @@ export function ReviewPage({
         >
           <Icon name="refresh" size={16} /> {crossBusy ? "Đang chạy…" : "Chạy lại AI"}
         </button>
-        {/* Primary export — kept in the toolbar (not a floating button) so it never covers the review
-            controls. Turns green-emphasised once every case is handled (Cần xử lý = 0). */}
-        <a
-          className={`button button-primary button-compact export-top${
-            needCheckCount === 0 ? " export-top-ready" : ""
-          }`}
-          href={`/api/v1/jobs/${job.id}/export.xlsx`}
-          title={
-            needCheckCount === 0
-              ? "Đã soát xong tất cả — xuất GT ra Excel"
-              : "Xuất GT ra Excel (trạng thái hiện tại)"
-          }
-        >
-          <Icon name="download" size={16} /> Xuất Excel
-        </a>
       </div>
       </div>
 
@@ -930,7 +908,7 @@ export function ReviewPage({
           {[
             ["ALL", "Tất cả", results.total],
             ["RECOGNIZED", "Đọc được biển", readCounts.reliable],
-            ["NO_PLATE", "Không có biển", readCounts.noPlate],
+            ["NO_PLATE", "Xe không biển", readCounts.noPlate],
             ["DIVIDER", "", 0],
             ["CHECK", "Cần xử lý", needCheckCount],
           ].map(([value, label, count]) =>
@@ -966,21 +944,7 @@ export function ReviewPage({
                 const rec = gtByTrack.get(event.track_id);
                 const discarded = rec?.verify_status === "DISCARDED" || rec?.is_duplicate;
                 return (
-                  <div
-                    className="track-item-wrap"
-                    key={event.track_id}
-                    onMouseEnter={(e) => {
-                      // Fixed-position popup computed from the row's rect — the list has
-                      // overflow:auto, so an in-flow absolute popup would be clipped.
-                      const r = e.currentTarget.getBoundingClientRect();
-                      setHoverTrack({
-                        event,
-                        anchorY: r.top + r.height / 2,
-                        left: r.right + 10,
-                      });
-                    }}
-                    onMouseLeave={() => setHoverTrack(null)}
-                  >
+                  <div className="track-item-wrap" key={event.track_id}>
                     <button
                       className={`track-item ${event.track_id === selected.track_id ? "active" : ""}${
                         discarded ? " track-item-discarded" : ""
@@ -1109,9 +1073,7 @@ export function ReviewPage({
                   <div className="ct-gaps-list">
                     <span className="ct-gaps-title">
                       <span className="ct-gap-legend" />{" "}
-                      {missedScan?.status === "done"
-                        ? `AI xác nhận có xe (${suspectedGaps.length})`
-                        : `Nghi bỏ sót (${suspectedGaps.length})`}
+                      {`Nghi bỏ sót / đoạn trống cần kiểm (${suspectedGaps.length})`}
                       :
                     </span>
                     {visibleGaps.map((gap) => (
@@ -1230,6 +1192,7 @@ export function ReviewPage({
                 </div>
               </div>
             ) : (
+            <>
             <div
               className="full-frame"
               onMouseLeave={() => setLoupe(null)}
@@ -1292,6 +1255,50 @@ export function ReviewPage({
                 </>
               )}
             </div>
+            {/* Fills the space under the aspect-locked frame with the case's evidence facts (the same
+                data the list hover shows). The crop is clickable to enlarge. */}
+            <div className="frame-facts">
+              {selectedCropUrl && (
+                <button
+                  className="frame-facts-crop"
+                  onClick={() => setZoomCrop(selectedCropUrl)}
+                  title="Bấm để phóng to ảnh crop"
+                  type="button"
+                >
+                  <img alt={`Crop ${selected.track_code}`} src={selectedCropUrl} />
+                  <span className="frame-facts-zoom">
+                    <Icon name="search" size={13} />
+                  </span>
+                </button>
+              )}
+              <dl className="frame-facts-meta">
+                <div>
+                  <dt>Mã lượt xe</dt>
+                  <dd>{selected.track_code}</dd>
+                </div>
+                <div>
+                  <dt>Thời điểm</dt>
+                  <dd>{formatTime(selected.best_timestamp_ms)}</dd>
+                </div>
+                <div>
+                  <dt>Số lần bắt xe</dt>
+                  <dd>{selected.vehicle_detection_count}</dd>
+                </div>
+                <div>
+                  <dt>Số lần bắt biển</dt>
+                  <dd>{selected.plate_detection_count}</dd>
+                </div>
+                <div>
+                  <dt>Khung xe</dt>
+                  <dd>{selected.vehicle_bbox.join(", ")}</dd>
+                </div>
+                <div>
+                  <dt>Khung biển</dt>
+                  <dd>{selected.plate_bbox?.join(", ") ?? "Không phát hiện"}</dd>
+                </div>
+              </dl>
+            </div>
+            </>
             )}
             </div>
 
@@ -1425,15 +1432,6 @@ export function ReviewPage({
         </div>
       )}
 
-      {showCompare && (
-        <GtCompareDialog
-          jobId={job.id}
-          onApplied={() => setGtReload((value) => value + 1)}
-          onClose={() => setShowCompare(false)}
-        />
-      )}
-
-
       {crossResult !== null && (
         <div className="modal-overlay" onClick={() => setCrossResult(null)} role="presentation">
           <div
@@ -1519,12 +1517,41 @@ export function ReviewPage({
         />
       )}
 
+      {/* Floating export — frosted glass so content behind stays visible, prominent border/shadow, and
+          a green glow-pulse once every case is handled (Cần xử lý = 0). The grid keeps a bottom gutter
+          so this never sits over the record-nav buttons when scrolled to the end. */}
+      <a
+        className={`export-fab${needCheckCount === 0 ? " export-fab-ready" : ""}`}
+        href={`/api/v1/jobs/${job.id}/export.xlsx`}
+        title={
+          needCheckCount === 0
+            ? "Đã soát xong tất cả — xuất GT ra Excel"
+            : "Xuất GT ra Excel (trạng thái hiện tại)"
+        }
+      >
+        <Icon name="download" size={18} /> Xuất Excel
+      </a>
+
       <RenameJobDialog
         initialName={job.source_name}
         onClose={() => setRenaming(false)}
         onSave={(name) => onRename(job, name)}
         open={renaming}
       />
+
+      {zoomCrop && (
+        <div className="crop-zoom-overlay" onClick={() => setZoomCrop(null)} role="presentation">
+          <img alt="Ảnh crop phóng to" className="crop-zoom-img" src={zoomCrop} />
+          <button
+            aria-label="Đóng"
+            className="crop-zoom-close"
+            onClick={() => setZoomCrop(null)}
+            type="button"
+          >
+            <Icon name="x" size={20} />
+          </button>
+        </div>
+      )}
 
       <ConfirmDialog
         busy={gapBusy}
@@ -1574,54 +1601,6 @@ export function ReviewPage({
       )}
 
 
-      {hoverTrack && (
-        <div
-          className="track-popup"
-          ref={popupRef}
-          role="tooltip"
-          style={{ position: "fixed", top: hoverTop, left: hoverTrack.left }}
-        >
-          <img
-            alt={`Crop ${hoverTrack.event.track_code}`}
-            className="track-popup-crop"
-            onLoad={() => {
-              // The crop's height isn't known until it loads; re-clamp so a tall crop still fits.
-              if (!popupRef.current) return;
-              const height = popupRef.current.offsetHeight;
-              setHoverTop(
-                Math.max(12, Math.min(hoverTrack.anchorY - height / 2, window.innerHeight - height - 12)),
-              );
-            }}
-            src={hoverTrack.event.plate_crop_url ?? hoverTrack.event.vehicle_crop_url}
-          />
-          <dl className="track-popup-meta">
-            <div>
-              <dt>Mã lượt xe</dt>
-              <dd>{hoverTrack.event.track_code}</dd>
-            </div>
-            <div>
-              <dt>Thời điểm</dt>
-              <dd>{formatTime(hoverTrack.event.best_timestamp_ms)}</dd>
-            </div>
-            <div>
-              <dt>Khung xe</dt>
-              <dd>{hoverTrack.event.vehicle_bbox.join(", ")}</dd>
-            </div>
-            <div>
-              <dt>Khung biển</dt>
-              <dd>{hoverTrack.event.plate_bbox?.join(", ") ?? "Không phát hiện"}</dd>
-            </div>
-            <div>
-              <dt>Số lần bắt xe</dt>
-              <dd>{hoverTrack.event.vehicle_detection_count}</dd>
-            </div>
-            <div>
-              <dt>Số lần bắt biển</dt>
-              <dd>{hoverTrack.event.plate_detection_count}</dd>
-            </div>
-          </dl>
-        </div>
-      )}
     </section>
   );
 }
@@ -1666,7 +1645,9 @@ function GtPanel({
   // Prefill the category with AI-1's label as a SUGGESTION even when the two AIs disagree — the
   // reviewer just confirms it with one click (or changes it), never has to type from scratch.
   const [quality, setQuality] = useState(
-    record?.classification ?? (suspectNoPlate ? NO_PLATE_OPTION : cloudQuality) ?? "",
+    normalizeQuality(record?.classification) ||
+      (suspectNoPlate ? NO_PLATE_OPTION : normalizeQuality(cloudQuality)) ||
+      "",
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1789,10 +1770,11 @@ function GtPanel({
             // 1-1-1 split — the three AIs each said something different; show all so you decide.
             <>
               ⚠ 3 AI phân loại khác nhau:{" "}
-              <strong>{(cloudQualityAll ?? []).join(" · ")}</strong> — vui lòng chọn phân loại.
+              <strong>{(cloudQualityAll ?? []).map(normalizeQuality).join(" · ")}</strong> — vui lòng
+              chọn phân loại.
             </>
           ) : (
-            `Gợi ý: "${cloudQuality}" (2/3 AI khớp, đã điền sẵn — chỉnh nếu cần).`
+            `Gợi ý: "${normalizeQuality(cloudQuality)}" (2/3 AI khớp, đã điền sẵn — chỉnh nếu cần).`
           )}
         </p>
       ) : null}

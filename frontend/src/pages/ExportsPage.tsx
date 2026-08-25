@@ -159,7 +159,7 @@ export function ExportsPage({
             <table className="data-table export-table">
               <thead>
                 <tr>
-                  <th>Tên phiên</th>
+                  <th>Tên phiên xử lý</th>
                   <th>Loại xe</th>
                   <th>Tiến độ</th>
                   <th>Trạng thái</th>

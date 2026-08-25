@@ -5,22 +5,38 @@ in [`docs/18-lane9-gt-export-contract.md`](docs/18-lane9-gt-export-contract.md).
 
 ## Current product scope
 
-- MVP target: motorcycles passing a toll/parking lane, rear-facing camera.
-- Input: one uploaded video.
+- Target: motorcycles, e-bikes and small cars passing a toll/parking lane, rear-facing camera. Two
+  lane modes selected at job creation: **motorcycle** (YOLOX + MOG2 motion, so bikes / e-bikes /
+  cargo bikes are caught) and **car** (YOLOX car/bus/truck only, no motion).
+- Input: one uploaded video, ≤ **8 GB**, `.mp4/.mov/.avi/.mkv/.m4v`. `source_name` is a display-only
+  label (editable in the UI, ≤ 30 chars); the on-disk file/path are never renamed.
 - Output unit: one evidence-backed vehicle event.
-- Pipeline: YOLOX-Tiny vehicle detection, YOLOv9-T plate detection, multi-frame CCT OCR, tracking,
-  best-frame selection, duplicate consolidation, PostgreSQL persistence.
-- Runtime: offline ONNX Runtime CPU. No external AI API is called during video processing.
-- Optional cloud OCR cross-check: an opt-in review-stage step (`POST /jobs/{id}/cross-check`) may
-  send plate crops to a cloud vision model as an independent SECOND reader. It runs only after
-  processing, never inside the offline worker, is disabled unless `CLOUD_OCR_ENABLED` + an API key
-  are set, and never writes GT — a disagreement only flags the case (`OCR_DISAGREEMENT`) for a human.
-- Current pipeline identifier: `motorcycle-alpr-v4`.
+- Optional pre-step "Cắt video" (condense, `POST /condense`): scan the source for lane activity and
+  re-encode only the busy segments into one shorter clip, so long idle footage isn't processed. It
+  never writes GT; you then create a job from the condensed clip (or the raw video).
+- Pipeline (`motorcycle-alpr-v4`): a single **fused** pass — frame extract + YOLOX-Tiny vehicle
+  detection + YOLOv9-T plate detection + multi-frame **CCT-XS** OCR + tracking + best-frame selection
+  + duplicate consolidation → PostgreSQL. Runtime: offline ONNX Runtime CPU; no external AI API is
+  called during video processing.
+- Optional cloud OCR cross-check (opt-in, review stage, `POST /jobs/{id}/cross-check`): after
+  processing, three INDEPENDENT readers read each plate crop — the local CCT + **AI-1** (GPT) +
+  **AI-2** (Qwen); a fourth AI is a classification-only tie-breaker. It runs only after processing,
+  never inside the offline worker, and is disabled unless `CLOUD_OCR_ENABLED` + API keys are set.
+  A **2/3 majority** agreement (`OCR_AGREE`, or `OCR_UNANIMOUS` when all three match) auto-fills GT
+  and auto-verifies the case; a reader split (`OCR_DISAGREEMENT`), and every `REPEATED_PLATE`,
+  `SPECIAL_PLATE` or quality disagreement, are NEVER auto-verified and always go to a human.
+- Optional missed-vehicle recall ("soát bỏ sót"): a background gap-scan after the cross-check re-reads
+  long empty stretches to flag vehicles the pipeline may have missed. It never writes GT — it only
+  refines the "nghi bỏ sót" timeline for a human to confirm and add.
 
 ## Non-negotiable rules
 
-1. `Prediction` is model output. It is never automatically treated as Ground Truth.
-2. `GT Plate` is human-entered or imported ground truth only.
+1. A single model's `Prediction` is never automatically treated as Ground Truth. GT is written
+   automatically ONLY when ≥ 2 of the 3 independent readers (local CCT OCR + AI-1 + AI-2) agree on the
+   same normalized plate (auto-verify). Reader splits, and every `REPEATED_PLATE`, `SPECIAL_PLATE` and
+   quality disagreement, are never auto-verified — a human decides.
+2. `GT Plate` is human-entered / imported, or filled by the ≥ 2/3 reader consensus above; never by a
+   single model on its own.
 3. No evidence, no record: every exported row must resolve to its source video, timestamps, frame
    and stored crop/full-frame evidence.
 4. One export row per continuous *pass* of a vehicle, not per plate string. When the tracker
@@ -55,29 +71,24 @@ claim its row count, formulas, full sheet list or final GT values have been prog
 verified. The user-provided screenshot confirms a visible sheet named `Plate Report` and the
 9-column presentation contract documented below.
 
-## Required model-review Excel columns
+## Excel / CSV export (current state)
 
-The primary sheet must be named `Plate Report` and contain exactly these visible columns, in order:
-
-```text
-STT
-Ảnh crop biển số
-Plate model đọc
-GT Plate
-Start
-End
-Confidence
-Frame #
-Discard
-```
-
-The current implemented endpoint is still a 20-column technical CSV:
+The "Xuất Excel" button is implemented and wired to:
 
 ```text
-GET /api/v1/jobs/{job_id}/export.csv
+GET /api/v1/jobs/{job_id}/export.xlsx        # working GT-review workbook (one row per pass)
+GET /api/v1/jobs/{job_id}/export/final.xlsx  # GT Final / benchmark workbook
+GET /api/v1/jobs/{job_id}/export.csv         # technical CSV
 ```
 
-It is not the requested final XLSX review artifact. Do not relabel it as such. Before enabling an
-XLSX button, implement and test the contract in `docs/18-lane9-gt-export-contract.md`, including
-embedded crop images.
+`export.xlsx` currently renders with the **GT Final** template (`build_gt_final_workbook`, sheet
+`GT Final`) — embedded full-frame + plate-crop images, model reading, GT, recognition level,
+confidence, frame, discard/QA columns. The download filename keeps Vietnamese diacritics
+(RFC 5987 `filename*`) and drops the video extension.
+
+A separate **`Plate Report`** template (`backend/app/export/plate_report.py`) — the 9→15-column
+presentation with `STT · Ảnh crop biển số · Plate model đọc · GT Plate · Start · End · Confidence ·
+Frame # · Discard` plus recognition-level / QA columns — exists in code but is NOT the workbook the
+button serves. Wire/switch to it (and test the contract in `docs/18-lane9-gt-export-contract.md`,
+including embedded crop images) if that exact Lane-9 presentation is required.
 

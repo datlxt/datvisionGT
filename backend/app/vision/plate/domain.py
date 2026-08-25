@@ -275,10 +275,20 @@ def finalize_vehicle_track(
             for item in track.observations
         )
         if semantic_vehicle_observations == 0:
-            # Pure motion (MOG2) with no semantic vehicle detection is a review candidate
-            # that must not be auto-published as a confirmed vehicle event.
-            classification = EventClassification.UNREADABLE
-            flags.append("MOTION_ONLY_NO_PLATE_CANDIDATE")
+            if len(track.observations) >= 3:
+                # Sustained motion but no YOLOX shape confirmation (e.g. a cloth-covered e-bike, or a
+                # steep top-down angle). Treat it as a plateless vehicle so it (a) MERGES with its own
+                # fragments — the same pass isn't split into duplicate rows — and (b) lands in the
+                # "Xe không biển" group for the reviewer to confirm. MOTION_NO_PLATE records that the
+                # shape was only motion-confirmed; the case still needs a human (NO_PLATE is never
+                # auto-verified).
+                classification = EventClassification.NO_PLATE
+                flags.append("MOTION_NO_PLATE")
+            else:
+                # A brief motion blip (a person / shadow / cart crossing) — a review candidate that
+                # must not be auto-published; consolidation drops these unless they overlap nothing.
+                classification = EventClassification.UNREADABLE
+                flags.append("MOTION_ONLY_NO_PLATE_CANDIDATE")
         else:
             # A real vehicle without a plate is still an event (contract rule #5). A short
             # pass is kept and flagged so the reviewer can judge the weaker evidence,
@@ -448,7 +458,24 @@ def consolidate_vehicle_events(
     events: list[VehicleEventResult],
     *,
     same_plate_gap_ms: int = 5_000,
-    same_no_plate_gap_ms: int = 14_000,
+    # Max gap between two no-plate FRAGMENTS that are still ONE vehicle. The tracker already keeps a
+    # continuously-seen vehicle as one track (it only splits on a >1.25s detection gap), so this
+    # merge just rejoins the SAME pass across a brief mid-pass occlusion (a person / barrier crossing
+    # in front). It must stay SMALL: two DIFFERENT no-plate vehicles are separated by the lane
+    # clearing between them (here a bicycle at 61-70s and a YADEA e-bike at 75-82s sit ~5.5s apart) —
+    # a wide window (the old 14s) glued those two distinct vehicles into one case, hiding a vehicle.
+    # 4s rejoins a real occlusion split yet keeps vehicles separated by a lane-clearing gap distinct.
+    # Erring small favours over-detection (a rare split the reviewer merges in one click) over
+    # under-detection (a silently-dropped vehicle), which is the contract's priority.
+    same_no_plate_gap_ms: int = 4_000,
+    # A no-plate vehicle is PRESENT in the lane for seconds, not minutes. Without a span cap the
+    # no-plate merge chains contiguous fragments end-to-end: at a busy gate something is almost
+    # always in the lane, so every fragment sits within same_no_plate_gap_ms of the last and the
+    # whole video collapses into ONE video-long no-plate blob. That blob swallows a distinct crossing
+    # vehicle (a bicycle in an otherwise-empty stretch) and, overlapping every plated pass, is then
+    # dropped wholesale — so the crossing vehicle is lost. Capping the merged span keeps each real
+    # pass its own event, so the bicycle survives as a standalone "xe không biển" case.
+    max_no_plate_span_ms: int = 25_000,
     near_plate_gap_ms: int = 1_500,
     # Max time a plate may be FULLY undetected mid-pass (occluded by a person / barrier / another
     # vehicle) yet still count as the SAME pass. Same-plate reads farther apart than this are kept
@@ -519,6 +546,33 @@ def consolidate_vehicle_events(
             quality_flags=tuple(sorted(flags)),
         )
 
+    # Drop no-plate BODY fragments of a plated pass BEFORE merging no-plate fragments together.
+    # A no-plate event that overlaps a plated pass in time is that vehicle's own body detected
+    # without its plate (single-file lane: two vehicles can't occupy the same instant). If it is
+    # left in, the no-plate merge can glue it to a REAL plateless vehicle sitting in the adjacent
+    # gap (within same_no_plate_gap_ms) — the combined event then straddles the plated pass and is
+    # dropped as an overlap, taking the real vehicle down with it. That is exactly how the 2nd
+    # no-plate e-bike was lost: 116.5–120.5 (98D's body) merged with 125.5–128.5 (the real e-bike).
+    # Removing the body fragments first lets each real gap vehicle stay its own standalone event.
+    _plated_spans = [
+        (event.start_timestamp_ms, event.end_timestamp_ms)
+        for event in merged
+        if event.plate_detection_count > 0
+    ]
+    merged = [
+        event
+        for event in merged
+        if not (
+            event.classification == EventClassification.NO_PLATE
+            and event.plate_detection_count == 0
+            and any(
+                event.start_timestamp_ms <= plated_end
+                and event.end_timestamp_ms >= plated_start
+                for plated_start, plated_end in _plated_spans
+            )
+        )
+    ]
+
     no_plate_merged: list[VehicleEventResult] = []
     for event in merged:
         if event.classification != EventClassification.NO_PLATE:
@@ -535,6 +589,11 @@ def consolidate_vehicle_events(
                 # different bikes share the same lane spot, so IoU cannot separate them.
                 and event.start_timestamp_ms - no_plate_merged[index].end_timestamp_ms
                 <= same_no_plate_gap_ms
+                # ...but never let the merged event grow past one realistic pass — otherwise a busy
+                # gate's back-to-back fragments chain into a video-long blob (see max_no_plate_span_ms).
+                and max(no_plate_merged[index].end_timestamp_ms, event.end_timestamp_ms)
+                - no_plate_merged[index].start_timestamp_ms
+                <= max_no_plate_span_ms
             ),
             None,
         )
@@ -615,7 +674,9 @@ def consolidate_vehicle_events(
         # short (≤2s) OR the overlapping event dominates by readable frames (e.g. 1 read vs 61):
         # a real second bike keeps its own sustained track, not a lone misread frame.
         duplicate_plate_fragment = (
-            event.plate_detection_count <= 3
+            # This filter is about a misread PLATE fragment near a stronger plate — it must NOT touch a
+            # genuine no-plate vehicle (plate_count == 0), which is a real "xe không biển" event.
+            1 <= event.plate_detection_count <= 3
             and any(
                 other is not event
                 and other.plate_detection_count > event.plate_detection_count
@@ -671,10 +732,21 @@ def consolidate_vehicle_events(
                     and "SINGLE_READING_OCR" in event.quality_flags
                     and non_plate_aspect
                 )
+        # A SUSTAINED candidate (>= 3 vehicle detections ≈ 1.5s at 2 fps) is a real thing crossing the
+        # lane — a bicycle / no-plate e-bike YOLOX under-scored, or a plateless vehicle passing next to
+        # a plated one. Never silently drop it; surface it for the reviewer (contract: no missed pass).
+        # Only BRIEF blips/fragments (< 3 detections) fall through the motion-only / no-plate-overlap
+        # filters. The noise-specific filters (misread card, non-plate shape, duplicate/weak fragment)
+        # still apply regardless — those are genuine false reads, not vehicles.
+        sustained = event.vehicle_detection_count >= 3
         if (
-            event.plate_detection_count == 0
-            and overlaps_plated_event
-            or motion_only
+            # A no-plate event that OVERLAPS a plated pass in time is that vehicle's own body detected
+            # without its plate (YOLOX boxes the bike separately from where the plate reads) — it
+            # cannot be a second vehicle occupying the same lane at the same instant, so drop it even
+            # when sustained. A sustained no-plate event in a plated-FREE stretch is a REAL crossing
+            # vehicle (a bicycle / plateless e-bike) and is kept; only a brief blip there is dropped.
+            (event.plate_detection_count == 0 and (overlaps_plated_event or not sustained))
+            or (motion_only and not sustained)
             or weak_unreadable_plate
             or split_unreadable_fragment
             or duplicate_plate_fragment

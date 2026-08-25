@@ -91,7 +91,8 @@ async def create_condense(
                 size += len(chunk)
                 if size > settings.max_upload_bytes:
                     raise HTTPException(
-                        status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Video exceeds 2 GB"
+                        status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        f"Video vượt quá {settings.max_upload_bytes // (1024**3)} GB",
                     )
                 destination.write(chunk)
         partial.replace(source)

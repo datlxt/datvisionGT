@@ -135,7 +135,7 @@ export function OverviewPage({
             type="button"
           >
             <Icon name={isVideo ? "scissors" : "plus"} size={19} />{" "}
-            {isVideo ? "Cắt video mới" : "Tạo phiên mới"}
+            {isVideo ? "Cắt video mới" : "Tạo phiên xử lý mới"}
           </button>
         }
         description="Theo dõi tiến độ xử lý video và các phiên đang chờ kiểm duyệt."
@@ -241,7 +241,7 @@ export function OverviewPage({
             </header>
             {scoped.length === 0 ? (
               <EmptyState
-                description="Nhấn “Tạo phiên mới” ở góc trên để bắt đầu."
+                description="Nhấn “Tạo phiên xử lý mới” ở góc trên để bắt đầu."
                 title="Chưa có phiên xử lý"
               />
             ) : (

@@ -58,6 +58,18 @@ export function CondensePage({
   useEffect(() => {
     let active = true;
     const check = () => {
+      // Restore the exact cut the user last worked on — running OR already finished — so the "Đã cắt
+      // xong" result card survives a reload (it lives in transient state, but the cut is on the server).
+      const storedId = localStorage.getItem("dvgt.condenseId");
+      if (storedId) {
+        api<CondenseStatus>(`/api/v1/condense/${storedId}`)
+          .then((restored) => {
+            if (active && !dismissedIds.current.has(restored.id)) {
+              setStatus((current) => current ?? restored);
+            }
+          })
+          .catch(() => localStorage.removeItem("dvgt.condenseId")); // gone/deleted → forget it
+      }
       api<CondenseStatus[]>("/api/v1/condense")
         .then((list) => {
           if (!active) return;
@@ -116,6 +128,7 @@ export function CondensePage({
     setFile(selected);
     setPreview(selected ? URL.createObjectURL(selected) : null);
     setStatus(null);
+    localStorage.removeItem("dvgt.condenseId");
     setMessage(null);
     setRoi(null);
   }
@@ -188,6 +201,7 @@ export function CondensePage({
         },
       );
       setStatus(created);
+      localStorage.setItem("dvgt.condenseId", created.id);
     } catch (reason) {
       setMessage({
         tone: "error",
@@ -210,6 +224,7 @@ export function CondensePage({
       /* ignore — reset the UI regardless so the user isn't stuck */
     }
     setStatus(null);
+    localStorage.removeItem("dvgt.condenseId");
     setCancelling(false);
     setMessage({
       tone: "success",
@@ -259,7 +274,7 @@ export function CondensePage({
                 <Icon name="upload" size={22} />
               </span>
               <strong>Kéo thả video vào đây hoặc nhấn để chọn</strong>
-              <p>MP4, AVI, MOV, MKV, M4V · Tối đa 2 GB</p>
+              <p>MP4, AVI, MOV, MKV, M4V · Tối đa 8 GB</p>
             </div>
           </>
         ) : (
@@ -436,31 +451,33 @@ export function CondensePage({
             </div>
           </header>
 
-          <div className="condense-stats">
-            <div>
-              <span>Video gốc</span>
-              <strong>{formatTime(status!.source_duration_ms ?? 0)}</strong>
-            </div>
-            <div>
-              <span>Sau khi cắt</span>
-              <strong>{formatTime(status!.condensed_duration_ms ?? 0)}</strong>
-            </div>
-            <div className="condense-stat-highlight">
-              <span>Đã bỏ đi</span>
-              <strong>{formatTime(status!.cut_ms ?? 0)}</strong>
-            </div>
-            <div>
-              <span>Số đoạn giữ</span>
-              <strong>{status!.segment_count}</strong>
+          <div className="condense-result-body">
+            <video
+              className="condense-preview"
+              controls
+              preload="metadata"
+              src={`/api/v1/condense/${status!.id}/download`}
+            />
+
+            <div className="condense-stats">
+              <div>
+                <span>Video gốc</span>
+                <strong>{formatTime(status!.source_duration_ms ?? 0)}</strong>
+              </div>
+              <div>
+                <span>Sau khi cắt</span>
+                <strong>{formatTime(status!.condensed_duration_ms ?? 0)}</strong>
+              </div>
+              <div className="condense-stat-highlight">
+                <span>Đã bỏ đi</span>
+                <strong>{formatTime(status!.cut_ms ?? 0)}</strong>
+              </div>
+              <div>
+                <span>Số đoạn giữ</span>
+                <strong>{status!.segment_count}</strong>
+              </div>
             </div>
           </div>
-
-          <video
-            className="condense-preview"
-            controls
-            preload="metadata"
-            src={`/api/v1/condense/${status!.id}/download`}
-          />
 
           <div className="condense-actions">
             <a
@@ -513,6 +530,9 @@ export function CondensePage({
           mode="manage"
           onDeleted={(id) => {
             if (status?.id === id) setStatus(null);
+            if (localStorage.getItem("dvgt.condenseId") === id) {
+              localStorage.removeItem("dvgt.condenseId");
+            }
           }}
           onSendToGt={onOpenInCreate}
           reloadKey={listReload}

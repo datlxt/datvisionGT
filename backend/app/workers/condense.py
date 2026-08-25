@@ -76,6 +76,10 @@ def condense_video(
         [
             YoloXMotorcycleDetector(
                 _model_path(model_root, settings.vehicle_model_path),
+                # Keep BICYCLE (COCO 1) + motorcycle (3) so a bicycle isn't cut out of the condensed
+                # clip when its motion is weak (walked/ridden slowly); lower gate to match the pipeline.
+                vehicle_class_ids=(1, 3),
+                confidence_threshold=0.22,
                 intra_op_threads=settings.model_intra_op_threads,
             ),
             FixedCameraMotionDetector(),

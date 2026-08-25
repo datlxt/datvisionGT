@@ -36,12 +36,14 @@ from app.vision.plate.cloud_ocr import read_gap_vehicle_openai
 from app.vision.plate.domain import plate_key
 
 # A gap must be at least this long to be worth scanning — matches the frontend "nghi bỏ sót" bar.
-_MIN_GAP_MS = 6_000
+# Lowered 6s → 3.5s to also scan SHORT gaps (e.g. a bicycle briefly crossing) at the cost of more AI
+# calls + more candidates for the human to confirm.
+_MIN_GAP_MS = 2_000
 # Each detected vehicle interval is padded by this on EACH side before computing gaps, so a car's
 # lead-in / standstill overhang (its track can end while it still idles at the barrier) is treated as
 # "covered". Tuned to OVER-WARN (a missed vehicle is far worse than a spare warning the human dismisses
 # in one click): 4s → a real gap must exceed ~14s (was 18s) so more borderline stretches get scanned.
-_OVERHANG_PAD_MS = 4_000
+_OVERHANG_PAD_MS = 1_200
 # Ignore this much at each gap edge. Kept small so a vehicle passing near a gap boundary (e.g. a slow
 # scooter being WALKED through) is still sampled instead of inset away.
 _EDGE_MARGIN_MS = 1_000
@@ -51,10 +53,10 @@ _SAME_PASS_WINDOW_MS = 90_000
 # A sighting within this many ms of a detected vehicle's edge is that car's lead-in / standstill
 # overhang (its track can end while it still idles at the barrier), NOT a miss — so it's dropped.
 # This is the main filter, since the AI usually can't read the small/far plate in a wide gap frame.
-_ADJACENT_VEHICLE_MS = 15_000
+_ADJACENT_VEHICLE_MS = 6_000
 # Sampled frames probed per gap (evenly spaced). Raised so a vehicle that only shows for a moment
 # inside a gap (or near its edge) isn't skipped between samples. One YES keeps the gap.
-_SAMPLES_PER_GAP = 6
+_SAMPLES_PER_GAP = 9
 # Hard cap on AI calls per job so a pathological (long, sparse) video can't run up cost / time.
 _MAX_PROBES = 150
 _RECALL_CONCURRENCY = 6
@@ -83,18 +85,26 @@ def _roi_norm(job: ProcessingJob) -> tuple[float, float, float, float] | None:
 
 
 def _detected_intervals(session: Session, job: ProcessingJob) -> list[tuple[int, int]]:
-    """Every detected vehicle pass as a [start, end] ms interval, merged where they overlap.
+    """Every vehicle pass SHOWN ON THE TIMELINE as a [start, end] ms interval, merged where they
+    overlap.
 
-    Uses raw VEHICLE tracks (pre-consolidation fragments included) — more intervals means smaller
-    gaps, so we never invent a gap where the pipeline actually saw a vehicle.
+    Uses the SAME consolidated events the reviewer sees (``_load_results``), NOT raw VEHICLE tracks.
+    This is the whole point of the safety-net: the AI must scan exactly the empty stretches the
+    reviewer sees on the timeline ("rà trên đoạn mà dòng line hiện"). A track that was DROPPED from
+    the displayed list — e.g. a 2-minute motion blob tracked across the whole video, or a no-plate
+    fragment overlapping a recognized pass — must NOT count as "covered" here. Counting raw tracks let
+    one such garbage track blanket the timeline so the recall reported "0 gaps" while the reviewer
+    plainly saw empty stretches. Conversely, a real no-plate / bicycle that the pipeline dropped now
+    leaves a genuine gap here → the AI scans it → it surfaces as "nghi bỏ sót" for the human.
     """
 
-    rows = session.execute(
-        select(Track.start_timestamp_ms, Track.end_timestamp_ms).where(
-            Track.job_id == job.id, Track.object_type == "VEHICLE"
-        )
-    ).all()
-    intervals = sorted((int(a), int(b)) for a, b in rows)
+    # Local import avoids an api<->worker import cycle at module load.
+    from app.api.results import _load_results
+
+    _job, events = _load_results(job.id, session)
+    intervals = sorted(
+        (int(event.start_timestamp_ms), int(event.end_timestamp_ms)) for event in events
+    )
     merged: list[tuple[int, int]] = []
     for start, end in intervals:
         if merged and start <= merged[-1][1]:

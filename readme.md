@@ -19,8 +19,11 @@ Upload video
   → Chọn frame biển rõ nhất (quality score: nét/độ phân giải/tương phản/chói)
   → Gom trùng theo lượt xe (biển giống + cách ≤90s ⇒ gộp; cách xa ⇒ 2 lượt riêng + cảnh báo REPEATED_PLATE)
   → Lưu PostgreSQL kèm artifact bằng chứng (crop + full frame)
+  → (tùy chọn) Đối chiếu AI: 3 nguồn đọc lại biển (CCT local + AI-1 GPT + AI-2 Qwen);
+       2/3 khớp ⇒ tự điền GT + tự duyệt; lệch / REPEATED_PLATE / SPECIAL_PLATE ⇒ để người soát
+  → (tùy chọn) AI soát bỏ sót: rà các đoạn trống tìm phương tiện có thể bị bỏ sót (không ghi GT)
   → Con người kiểm duyệt trên web (xác nhận / sửa / loại / bổ sung)
-  → Xuất danh sách mở được bằng Excel (CSV kỹ thuật 20 cột hiện có)
+  → Xuất Excel (XLSX) kèm ảnh crop + full-frame nhúng (tên file giữ dấu tiếng Việt), hoặc CSV kỹ thuật
 ```
 
 Mỗi lượt xe là một record dự thảo, gồm cả `NO_PLATE`, `UNREADABLE` và `LOW_CONFIDENCE`; hệ thống
@@ -43,6 +46,23 @@ Hướng dẫn kỹ thuật và deploy: [`docs/16-motorcycle-alpr-mvp.md`](docs/
 
 Quy ước Ground Truth Lane 9 và cấu trúc Excel `Plate Report` 9 cột:
 [`docs/18-lane9-gt-export-contract.md`](docs/18-lane9-gt-export-contract.md).
+
+### Cập nhật gần đây (trạng thái bản deploy hiện tại)
+
+- **Hai làn**: xe máy (YOLOX + chuyển động MOG2) và **ô tô** (YOLOX xe hơi/bus/tải, không motion) —
+  chọn khi tạo phiên. Upload ≤ **8 GB**, `.mp4/.mov/.avi/.mkv/.m4v`.
+- **Cắt video** nhanh hơn (encoder x264 `veryfast` + giải mã đa luồng; đoạn cắt giữ nguyên) và **giữ
+  kết quả "Đã cắt xong" sau khi reload**.
+- **Đổi tên phiên** ngay trên UI (tên hiển thị, ≤ 30 ký tự — không đổi file gốc). Tên file **xuất
+  Excel giữ dấu tiếng Việt** (RFC 5987) và bỏ đuôi `.mp4`.
+- **Đối chiếu AI 3 nguồn** (CCT local + AI-1 + AI-2): 2/3 khớp ⇒ tự điền GT + tự duyệt; lệch /
+  `REPEATED_PLATE` / `SPECIAL_PLATE` ⇒ để người soát. **AI soát bỏ sót** ở các đoạn trống (không ghi GT).
+- **Xuất Excel (XLSX)** đã nối nút "Xuất Excel" (`GET /jobs/{id}/export.xlsx`, template GT Final, kèm
+  ảnh nhúng); vẫn còn CSV kỹ thuật.
+- **Giao diện kiểm duyệt**: bố cục 3 cột cân đối, **kính lúp** phóng biển trên ảnh toàn cảnh, dải
+  thông tin bằng chứng + **bấm crop để phóng to**, nút Xuất Excel nổi (kính mờ) nhấp nháy khi soát xong.
+- ⚠️ **Chưa có đăng nhập** — thêm cổng bảo vệ (Caddy `basic_auth` hoặc login) trước khi mở ra Internet;
+  đổi `POSTGRES_PASSWORD` mặc định và **rotate key AI** đã dùng thử.
 
 <p align="center">
   <strong>Ground Truth Generation & Verification Platform</strong>

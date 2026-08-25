@@ -11,6 +11,17 @@ class GreedyVehicleTracker:
 
     iou_threshold: float = 0.2
     max_gap_ms: int = 1250
+    # A single toll-lane pass — even a vehicle briefly idling at the gate — lasts tens of seconds at
+    # most (the real plated passes here run 3–21s). A NO-PLATE track that stays alive far longer is
+    # the tracker latching onto continuous gate/queue activity at a fixed lane spot; it SWALLOWS
+    # distinct no-plate vehicles that cross that spot (e.g. a bicycle) into one giant blob which is
+    # then dropped wholesale as garbage — so the crossing vehicle never becomes its own event.
+    # Force-closing such a track lets the next observation seed a FRESH track, so a no-plate vehicle
+    # in an otherwise-empty stretch surfaces as its own "Xe không biển" case. Only applied while the
+    # track has read NO plate: a track that already carries a plate is a positively-identified
+    # vehicle and is NEVER split (protects the working recognized passes); and any over-split of a
+    # genuinely long single pass is re-merged downstream by consolidate_vehicle_events.
+    max_no_plate_lifetime_ms: int = 30_000
     _next_id: int = 1
     _active: list[VehicleTrack] = field(default_factory=list)
 
@@ -19,6 +30,10 @@ class GreedyVehicleTracker:
             track
             for track in self._active
             if timestamp_ms - track.last.timestamp_ms > self.max_gap_ms
+            or (
+                timestamp_ms - track.observations[0].timestamp_ms > self.max_no_plate_lifetime_ms
+                and not any(item.plate_bbox is not None for item in track.observations)
+            )
         ]
         self._active = [track for track in self._active if track not in closed]
         unmatched = list(observations)

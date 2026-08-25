@@ -226,7 +226,7 @@ def process_plate_job(job_id: str) -> dict[str, Any]:
             # Electric scooters / e-bikes are an unusual shape for COCO-trained YOLOX, so they
             # score low even as a bicycle — a 0.35 gate drops them (a real missed vehicle). Use a
             # lower gate for the two-wheeler mode to catch them; cars keep the stricter default.
-            vehicle_conf = 0.28 if vehicle_type == "motorcycle" else 0.35
+            vehicle_conf = 0.22 if vehicle_type == "motorcycle" else 0.35
             semantic_vehicle_detector = YoloXMotorcycleDetector(
                 vehicle_path,
                 vehicle_class_ids=class_ids,
