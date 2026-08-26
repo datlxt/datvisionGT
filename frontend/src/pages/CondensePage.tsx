@@ -549,7 +549,6 @@ export function CondensePage({
           </span>
           <div>
             <h2>Video đã cắt</h2>
-            <p>Bấm để xem lại video + chi tiết đã cắt. Xoá những bản không cần nữa.</p>
           </div>
         </header>
         <CondensedList

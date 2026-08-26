@@ -91,15 +91,16 @@ export function CondensedList({
   if (items === null) return null;
 
   if (items.length === 0) {
-    if (mode === "pick") {
-      return (
-        <EmptyState
-          description="Hãy cắt một video ở trang “Cắt video” trước, rồi quay lại đây chọn."
-          title="Chưa có video đã cắt"
-        />
-      );
-    }
-    return null;
+    return (
+      <EmptyState
+        description={
+          mode === "pick"
+            ? "Hãy cắt một video ở trang “Cắt video” trước, rồi quay lại đây chọn."
+            : "Video bạn cắt xong sẽ hiện ở đây để xem lại hoặc xoá."
+        }
+        title="Chưa có video đã cắt"
+      />
+    );
   }
 
   return (

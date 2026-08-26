@@ -35,11 +35,18 @@ from app.models.recognition import RecognitionResult
 from app.vision.plate.cloud_ocr import read_gap_vehicle_openai
 from app.vision.plate.domain import plate_key
 
-# A gap must be at least this long to be scanned. This MUST equal the frontend's GAP_MIN (the "nghi
-# bỏ sót" bar in ReviewPage) so the header count ("AI đã rà soát N đoạn trống") matches the number of
-# gaps actually drawn on the timeline — otherwise the AI silently scans small sub-6s gaps the reviewer
-# never sees and the two counts disagree. Keep the two constants in lock-step.
-_MIN_GAP_MS = 6_000
+# A gap must be at least this long to be scanned/flagged. Lane-dependent: motorbikes pass in tight
+# bursts so a 6s empty stretch is already suspicious, but CARS are slower and far sparser — a 6s gap
+# between two cars is perfectly normal, so a 6s threshold floods the "nghi bỏ sót" bar with dozens of
+# ordinary gaps. Cars therefore only flag much longer empty stretches. These MUST equal the frontend's
+# GAP_MIN (the bar in ReviewPage) so the header count ("AI đã rà soát N đoạn trống") matches the gaps
+# actually drawn on the timeline — keep the two in lock-step per lane.
+_MIN_GAP_MS = 6_000  # motorbike / e-bike lane
+_MIN_GAP_MS_CAR = 10_000  # car lane (slower, sparser traffic; YOLOX rarely misses a car)
+
+
+def _min_gap_for(vehicle_type: str | None) -> int:
+    return _MIN_GAP_MS_CAR if vehicle_type == "car" else _MIN_GAP_MS
 # No interval padding: the frontend computes raw gaps between displayed events with NO padding, so we
 # must too or the gap SET (and its count) drifts from the timeline. A detected vehicle's idle overhang
 # is instead handled downstream by _EDGE_MARGIN_MS (sample the gap's middle) + _ADJACENT_VEHICLE_MS
@@ -140,7 +147,9 @@ def _detected_plates(session: Session, job: ProcessingJob) -> list[tuple[str, in
     return out
 
 
-def _gaps(intervals: list[tuple[int, int]], duration_ms: int) -> list[tuple[int, int]]:
+def _gaps(
+    intervals: list[tuple[int, int]], duration_ms: int, min_gap_ms: int = _MIN_GAP_MS
+) -> list[tuple[int, int]]:
     """Empty stretches (no detected vehicle) worth flagging as a possible miss.
 
     Each detected interval is PADDED by ``_OVERHANG_PAD_MS`` first: a car's lead-in and its standstill
@@ -160,10 +169,10 @@ def _gaps(intervals: list[tuple[int, int]], duration_ms: int) -> list[tuple[int,
     gaps: list[tuple[int, int]] = []
     prev_end = 0
     for start, end in padded:
-        if start - prev_end >= _MIN_GAP_MS:
+        if start - prev_end >= min_gap_ms:
             gaps.append((max(0, prev_end), start))
         prev_end = max(prev_end, end)
-    if duration_ms and duration_ms - prev_end >= _MIN_GAP_MS:
+    if duration_ms and duration_ms - prev_end >= min_gap_ms:
         gaps.append((prev_end, duration_ms))
     return gaps
 
@@ -211,7 +220,8 @@ def scan_missed_vehicles(session: Session, job: ProcessingJob, settings: Setting
     intervals = _detected_intervals(session, job)
     detected_plates = _detected_plates(session, job)
     duration = int(job.duration_ms or 0)
-    gaps = _gaps(intervals, duration)
+    vehicle_type = (job.config_snapshot or {}).get("vehicle_type")
+    gaps = _gaps(intervals, duration, _min_gap_for(vehicle_type))
     if not gaps:
         return {"status": "done", "gaps": 0, "scanned": 0, "candidates": []}
 

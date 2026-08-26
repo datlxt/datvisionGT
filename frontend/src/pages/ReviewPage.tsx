@@ -550,7 +550,10 @@ export function ReviewPage({
     // upgraded to a confirmed candidate (with its frame + any plate); the rest stay as plain
     // "chưa kiểm" stretches for a manual look. (Before the AI recall existed, this raw-gap bar was the
     // whole feature — switching to AI-only silently hid gaps the AI wasn't sure about.)
-    const GAP_MIN = 6_000;
+    // Lane-dependent (MUST match backend missed.py _min_gap_for): motorbikes pass in tight bursts so
+    // a 6s empty stretch is already suspicious; cars are slower + sparser, so a 6s gap between two
+    // cars is normal and would flood the bar — cars only flag much longer empty stretches.
+    const GAP_MIN = job.vehicle_type === "car" ? 10_000 : 6_000;
     const ordered = [...(results?.events ?? [])].sort(
       (a, b) => a.start_timestamp_ms - b.start_timestamp_ms,
     );
