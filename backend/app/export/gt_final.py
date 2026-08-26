@@ -82,16 +82,20 @@ def _summary_block(sheet, result_range: str) -> None:
         ("Fail (FP - nhận diện sai)", f'=COUNTIF({result_range},"FP")'),
         ("Miss (FN - bỏ sót)", f'=COUNTIF({result_range},"FN")'),
         ("NA (Lặp đúng)", f'=COUNTIF({result_range},"NA")'),
-        ("Tổng đánh giá (Pass+Fail+Miss)", "=C3+C4+C5"),
-        ("Precision = TP/(TP+FP)", '=IF((C3+C4)=0,"",C3/(C3+C4))'),
-        ("Recall = TP/(TP+FN)", '=IF((C3+C5)=0,"",C3/(C3+C5))'),
+        # Self-references point at the VALUE column (D) — the count values now live in D3:D5.
+        ("Tổng đánh giá (Pass+Fail+Miss)", "=D3+D4+D5"),
+        ("Precision = TP/(TP+FP)", '=IF((D3+D4)=0,"",D3/(D3+D4))'),
+        ("Recall = TP/(TP+FN)", '=IF((D3+D5)=0,"",D3/(D3+D5))'),
     ]
+    # Place the summary in columns C (label) + D (value) so it lines up with — and borrows the wider
+    # width of — the "Ảnh cam toàn cảnh" / "Ảnh biển số" columns of the table below (labels no longer
+    # get clipped by the narrow "From - To" column).
     for index, (label, value) in enumerate(rows, start=1):
-        label_cell = sheet.cell(row=index, column=2, value=label)
+        label_cell = sheet.cell(row=index, column=3, value=label)
         if index in (1, 2):
             label_cell.font = _HEADER_FONT
         if value is not None:
-            value_cell = sheet.cell(row=index, column=3, value=value)
+            value_cell = sheet.cell(row=index, column=4, value=value)
             if index in (8, 9):  # Precision / Recall as percentages
                 value_cell.number_format = "0.0%"
 

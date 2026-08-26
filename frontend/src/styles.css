@@ -1932,6 +1932,12 @@ code {
 
 .evidence-video {
   display: grid;
+  /* Bound the single column to the container: without an explicit track the implicit `auto` column
+     sizes to the video's INTRINSIC width (~1280px), so `width:100%` on the <video> resolved to that
+     and the player overflowed the column — pushing the right panel off-screen with a horizontal
+     scrollbar. minmax(0,1fr) pins the track to the available width so the video fits its column. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 8px;
 }
 
@@ -2133,12 +2139,44 @@ code {
     inset 0 0 0 1px rgba(15, 23, 42, 0.07);
 }
 
-.ct-gaps-list {
+/* Two stacked groups (AI-confirmed vehicles / plain empty stretches); each is a title + a strip that
+   scrolls HORIZONTALLY, so the panel height is fixed no matter how many gaps a video has. */
+.ct-gaps {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 9px;
   margin-top: 8px;
+}
+
+.ct-gaps-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ct-gaps-strip {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.ct-gaps-strip::-webkit-scrollbar {
+  height: 6px;
+}
+
+.ct-gaps-strip::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+
+/* Chips never shrink — they keep their size and the row scrolls sideways instead of wrapping down. */
+.ct-gaps-strip > .ct-gap-chip {
+  flex: 0 0 auto;
 }
 
 .ct-gaps-title {
@@ -2150,6 +2188,21 @@ code {
   gap: 6px;
 }
 
+/* AI-confirmed row reads as amber "attention" — visually distinct from the red empty-stretch row. */
+.ct-gaps-title-ai {
+  color: #b45309;
+}
+
+/* A count of (0): stay calm/muted (grey + check) so an empty section reads as "clear", not a warning.
+   The header is still shown so the reviewer knows the section exists. */
+.ct-gaps-title-empty {
+  color: var(--muted);
+}
+
+.ct-gaps-title-empty .ct-gap-legend {
+  opacity: 0.4;
+}
+
 .ct-gap-chip {
   border: 1px solid #fca5a5;
   background: #fef2f2;
@@ -2158,29 +2211,12 @@ code {
   padding: 3px 10px;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .ct-gap-chip:hover {
   background: #fee2e2;
-}
-
-/* "+N nữa" / "Thu gọn" toggle when there are more gap chips than the visible cap. */
-.ct-gap-more {
-  align-self: center;
-  padding: 3px 11px;
-  border: 1px dashed var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 11.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.ct-gap-more:hover {
-  color: #2b64c4;
-  border-color: #2b64c4;
 }
 
 /* AI-confirmed missed vehicle: stronger (amber) + a thumbnail of the frame the AI saw. */
@@ -3276,6 +3312,11 @@ code {
 .pipeline-card {
   padding: 16px 18px;
   border-left: 1px solid var(--border);
+  /* Fill the column height and distribute the sections instead of clustering at the top with a big
+     dead space below: the 4 pipeline steps stretch to absorb the slack (airy, evenly spaced) while
+     the facts grid + action button stay anchored at the bottom. */
+  display: flex;
+  flex-direction: column;
 }
 
 .pipeline-progress > div {
@@ -3304,6 +3345,10 @@ code {
   margin: 12px 0;
   padding: 0;
   list-style: none;
+  /* Grow into the free space and spread the steps evenly across it. */
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .pipeline-list li {
@@ -3311,9 +3356,15 @@ code {
   grid-template-columns: 32px minmax(0, 1fr);
   align-items: center;
   gap: 11px;
+  /* Each step takes an equal share of the list height (min-height is the floor on short screens). */
+  flex: 1 1 0;
   min-height: 46px;
   border-bottom: 1px solid #e7eef3;
   color: #8696a2;
+}
+
+.pipeline-list li:last-child {
+  border-bottom: 0;
 }
 
 .pipeline-list li > span {
@@ -4847,6 +4898,72 @@ button.selection-card:hover:not(.selected) {
   padding: 22px 24px 24px;
 }
 
+/* Header carries a collapse toggle in its right corner; when collapsed the card shrinks to this one
+   line so the page stays compact. */
+.condense-result-head {
+  align-items: center;
+}
+
+.condense-result-head.is-collapsed {
+  margin-bottom: 0;
+}
+
+/* Source video name shown in the result header (stays visible even when collapsed). */
+.condense-result-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin: 8px 0 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #eef3f6;
+  color: #47586a;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.condense-result-name svg {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.condense-result-name span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.condense-collapse {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.condense-collapse:hover {
+  color: var(--text);
+  border-color: #c7d2da;
+  background: #f5f8fa;
+}
+
+.condense-collapse svg {
+  transition: transform 0.18s ease;
+}
+
+/* Expanded → point up (click to collapse); collapsed → chevron's default down (click to expand). */
+.condense-collapse-open svg {
+  transform: rotate(180deg);
+}
+
 /* Result block: video on the left, the 4 stat cards stacked on the right — fills the width, no empty
    side gaps. */
 .condense-result-body {
@@ -5003,6 +5120,13 @@ button.selection-card:hover:not(.selected) {
   align-items: center;
   gap: 8px;
   min-height: 50px;
+}
+
+/* Drop the faint divider line above the pager for THIS list only (each cut row is already a framed
+   card, so the separator just looked like clutter). Other lists' pagination keeps its border. */
+.condensed-list + .pagination {
+  border-top: none;
+  padding-top: 6px;
 }
 
 /* Invisible filler so a short last page keeps the list height constant (pager doesn't jump). */

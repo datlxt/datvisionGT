@@ -37,6 +37,12 @@ function verifyTone(status: GroundTruthRecord["verify_status"]) {
   return "neutral" as const;
 }
 
+// A case has been "dealt with" (leaves the "Cần xử lý" tab) once the reviewer either confirmed it
+// (VERIFIED) or threw it out (DISCARDED). Everything else still needs a human.
+function isHandledStatus(status: GroundTruthRecord["verify_status"] | undefined): boolean {
+  return status === "VERIFIED" || status === "DISCARDED";
+}
+
 // AI + reviewer now set a coarse 3-level "mức độ nhận diện" (how readable the plate is). The old
 // fine defect taxonomy moved to a human-only column in the export. "Xe không biển" stays here as the
 // no-plate marker (drives the sentinel GT).
@@ -71,7 +77,7 @@ function actionGt(recordId: string, action: "verify" | "discard" | "restore") {
   return api<GroundTruthRecord>(`/api/v1/ground-truth/${recordId}/${action}`, { method: "POST" });
 }
 
-type Filter = "ALL" | "RECOGNIZED" | "UNCERTAIN" | "NO_PLATE" | "CHECK";
+type Filter = "ALL" | "RECOGNIZED" | "NO_PLATE" | "CHECK";
 
 function confidence(value: number | null) {
   return value === null ? "Chưa có dữ liệu" : `${Math.round(value * 100)}%`;
@@ -173,13 +179,6 @@ function needsReview(event: EventResult): boolean {
 // (≥2 of 3 readers agree) — a clear plate seen once is not "uncertain". So a read is reliable when
 // it is a solid RECOGNIZED read OR a cross-check-agreed one; only a genuinely unconfirmed weak /
 // unreadable read stays in "Đọc chưa chắc".
-function isReliableRead(event: EventResult): boolean {
-  if (event.classification === "NO_PLATE" || !event.normalized_plate) return false;
-  return (
-    event.classification === "RECOGNIZED" || event.quality_flags.includes("OCR_AGREE")
-  );
-}
-
 // The plate a MAJORITY (≥2 of local + AI-1 + AI-2) read — regardless of WHICH two. This mirrors the
 // backend `_consensus_plate` that auto-fills GT: a 2/3 agreement wins even when the local model is
 // the odd one out, so the default fill never depends on local. Returns null if the readers are split.
@@ -488,16 +487,16 @@ export function ReviewPage({
         event.track_code.toUpperCase().includes(normalizedQuery) ||
         (event.normalized_plate ?? "").toUpperCase().includes(normalizedQuery);
       if (!matchesQuery) return false;
-      if (filter === "RECOGNIZED") return isReliableRead(event);
+      // Binary split so the two read tabs always sum to "Tất cả": "Xe không biển" = NO_PLATE, and
+      // "Đọc được biển" = every other case (a plate was read — confidently or not; the unconfirmed
+      // ones still surface in "Cần xử lý" for a human). No hidden bucket to leave the counts off by 1.
+      if (filter === "RECOGNIZED") return event.classification !== "NO_PLATE";
       if (filter === "NO_PLATE") return event.classification === "NO_PLATE";
-      // Read a plate but NOT confirmed (weak single-frame with no cross-check agreement, or
-      // unreadable) — so the three "read result" tabs add up to the total without dropping a case.
-      if (filter === "UNCERTAIN")
-        return !isReliableRead(event) && event.classification !== "NO_PLATE";
-      // "Cần xử lý" = everything not yet verified. The matched cases are already auto-verified, so
-      // what remains is exactly what a human still has to handle (risky reads + no-plate + splits).
+      // "Cần xử lý" = everything the human hasn't dealt with yet. A case is "dealt with" once it is
+      // VERIFIED (confirmed) OR DISCARDED (thrown out) — both leave the tab. Everything else (risky
+      // reads, unconfirmed no-plate, splits) still needs a human.
       if (filter === "CHECK") {
-        return gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED";
+        return !isHandledStatus(gtByTrack.get(event.track_id)?.verify_status);
       }
       return true;
     });
@@ -505,21 +504,19 @@ export function ReviewPage({
 
   const needCheckCount =
     results?.events.filter(
-      (event) => gtByTrack.get(event.track_id)?.verify_status !== "VERIFIED",
+      (event) => !isHandledStatus(gtByTrack.get(event.track_id)?.verify_status),
     ).length ?? 0;
 
-  // "Read result" buckets computed from the events (not the raw backend counts) so a single-frame
-  // read the cross-check CONFIRMED counts as "Model ra biển", not "Đọc chưa chắc". Mutually
-  // exclusive → the three sum to the total.
+  // Two mutually-exclusive read buckets that ALWAYS sum to the total: "Xe không biển" (NO_PLATE) and
+  // "Đọc được biển" (everything else). No third "đọc chưa chắc" bucket — the unconfirmed reads live
+  // under "Đọc được biển" here and are handled via the "Cần xử lý" tab, so the numbers stay in sync.
   const readCounts = useMemo(() => {
     const events = results?.events ?? [];
-    let reliable = 0;
     let noPlate = 0;
     for (const event of events) {
       if (event.classification === "NO_PLATE") noPlate += 1;
-      else if (isReliableRead(event)) reliable += 1;
     }
-    return { reliable, noPlate, uncertain: events.length - reliable - noPlate };
+    return { reliable: events.length - noPlate, noPlate };
   }, [results]);
 
   const totalMs = Math.max(
@@ -592,12 +589,34 @@ export function ReviewPage({
   const [openGapKey, setOpenGapKey] = useState<number | null>(null);
   const [gapBusy, setGapBusy] = useState(false);
   const [confirmDismissTs, setConfirmDismissTs] = useState<number | null>(null);
-  // Cap the "nghi bỏ sót" chips so a video with many gaps doesn't overflow the panel; the rest is
-  // one click away via "xem thêm".
-  const [gapsExpanded, setGapsExpanded] = useState(false);
-  const GAP_CHIP_LIMIT = 5;
   const openGap = suspectedGaps.find((gap) => gap.start === openGapKey) ?? null;
-  const visibleGaps = gapsExpanded ? suspectedGaps : suspectedGaps.slice(0, GAP_CHIP_LIMIT);
+  // Two distinct kinds, shown as two separate horizontally-scrolling rows so the reviewer can tell
+  // them apart AND neither can ever sprawl down the panel, however many there are:
+  //  · aiGaps   — the recall AI actually SAW a vehicle in this gap (act on these; carry a thumbnail).
+  //  · emptyGaps — a plain empty stretch to self-check (AI found nothing / hasn't confirmed a vehicle).
+  const aiGaps = suspectedGaps.filter((gap) => gap.confirmed);
+  const emptyGaps = suspectedGaps.filter((gap) => !gap.confirmed);
+  const renderGapChip = (gap: (typeof suspectedGaps)[number]) => (
+    <button
+      className={`ct-gap-chip${gap.confirmed ? " ct-gap-chip-ai" : ""}${
+        openGapKey === gap.start ? " ct-gap-chip-open" : ""
+      }`}
+      key={gap.start}
+      onClick={() => {
+        seekVideo(gap.ts);
+        setOpenGapKey(gap.confirmed && openGapKey !== gap.start ? gap.start : null);
+      }}
+      title={
+        gap.confirmed
+          ? "AI phát hiện có xe — nhấn để xem chi tiết"
+          : "Khoảng trống — nhấn để tua tới đầu khoảng và tự kiểm tra"
+      }
+      type="button"
+    >
+      {gap.frameUrl && <img alt="" className="ct-gap-thumb" src={gap.frameUrl} />}
+      {gap.confirmed ? formatTime(gap.ts) : `${formatTime(gap.start)}–${formatTime(gap.end)}`}
+    </button>
+  );
 
   async function dismissGap(tsMs: number) {
     // Remove this gap from the "nghi bỏ sót" timeline (false positive, or already added to GT).
@@ -685,8 +704,10 @@ export function ReviewPage({
   function selectTrack(trackId: string, startMs: number) {
     manualSelectUntil.current = Date.now() + 1500;
     setSelectedId(trackId);
-    // Keep whichever evidence tab the reviewer is on (frame vs video) when they move between cases —
-    // don't yank them to Video. The video is still seeked below so it's positioned if they switch.
+    // KEEP whichever evidence tab the reviewer is on when moving between cases — most review happens
+    // on the Video tab, so snapping back to "Ảnh toàn cảnh" every click was annoying. "Ảnh toàn cảnh"
+    // is only the initial default; once the reviewer opens Video it stays on Video. The video is still
+    // seeked below so it's positioned at this case's start.
     if (videoRef.current) {
       // Clicking a case = REVIEW that case: pause and jump to its start so the selection stays put.
       // (While playing, the follow-effect would keep re-selecting the track under the playhead —
@@ -1001,6 +1022,12 @@ export function ReviewPage({
               <div className="evidence-video">
                 <video
                   controls
+                  // A condensed clip packs vehicles back-to-back, so at 1× cases flash past too fast to
+                  // review. Start a bit slower (0.75×) so passes are easy to follow — still quick, and
+                  // the reviewer can change speed via the player's own controls if they want.
+                  onLoadedMetadata={(event) => {
+                    event.currentTarget.playbackRate = 0.75;
+                  }}
                   onTimeUpdate={(event) =>
                     setVideoMs(Math.round(event.currentTarget.currentTime * 1000))
                   }
@@ -1069,49 +1096,34 @@ export function ReviewPage({
                   <span className="ct-now">▶ {formatTime(videoMs)}</span>
                   <span>{formatTime(totalMs)}</span>
                 </div>
-                {suspectedGaps.length > 0 && (
-                  <div className="ct-gaps-list">
-                    <span className="ct-gaps-title">
-                      <span className="ct-gap-legend" />{" "}
-                      {`Nghi bỏ sót / đoạn trống cần kiểm (${suspectedGaps.length})`}
-                      :
-                    </span>
-                    {visibleGaps.map((gap) => (
-                      <button
-                        className={`ct-gap-chip${gap.confirmed ? " ct-gap-chip-ai" : ""}${
-                          openGapKey === gap.start ? " ct-gap-chip-open" : ""
+                {(suspectedGaps.length > 0 || missedScan?.status === "done") && (
+                  <div className="ct-gaps">
+                    <div className="ct-gaps-group">
+                      <span
+                        className={`ct-gaps-title${emptyGaps.length === 0 ? " ct-gaps-title-empty" : ""}`}
+                      >
+                        <span className="ct-gap-legend" />
+                        Nghi bỏ sót ({emptyGaps.length})
+                      </span>
+                      {emptyGaps.length > 0 && (
+                        <div className="ct-gaps-strip">{emptyGaps.map(renderGapChip)}</div>
+                      )}
+                    </div>
+                    {/* Always rendered — even at (0) — so the reviewer can SEE that the AI recall part
+                        exists (just found nothing yet), not wonder whether it ran. */}
+                    <div className="ct-gaps-group ct-gaps-group-ai">
+                      <span
+                        className={`ct-gaps-title ${
+                          aiGaps.length > 0 ? "ct-gaps-title-ai" : "ct-gaps-title-empty"
                         }`}
-                        key={gap.start}
-                        onClick={() => {
-                          seekVideo(gap.ts);
-                          setOpenGapKey(
-                            gap.confirmed && openGapKey !== gap.start ? gap.start : null,
-                          );
-                        }}
-                        title={
-                          gap.confirmed
-                            ? "AI phát hiện có xe — nhấn để xem chi tiết"
-                            : "Khoảng trống — nhấn để tua tới đầu khoảng và tự kiểm tra"
-                        }
-                        type="button"
                       >
-                        {gap.frameUrl && (
-                          <img alt="" className="ct-gap-thumb" src={gap.frameUrl} />
-                        )}
-                        {gap.confirmed ? formatTime(gap.ts) : `${formatTime(gap.start)}–${formatTime(gap.end)}`}
-                      </button>
-                    ))}
-                    {suspectedGaps.length > GAP_CHIP_LIMIT && (
-                      <button
-                        className="ct-gap-more"
-                        onClick={() => setGapsExpanded((value) => !value)}
-                        type="button"
-                      >
-                        {gapsExpanded
-                          ? "Thu gọn"
-                          : `+${suspectedGaps.length - GAP_CHIP_LIMIT} nữa`}
-                      </button>
-                    )}
+                        <Icon name={aiGaps.length > 0 ? "alert" : "check"} size={14} />
+                        AI soát ra có xe ({aiGaps.length})
+                      </span>
+                      {aiGaps.length > 0 && (
+                        <div className="ct-gaps-strip">{aiGaps.map(renderGapChip)}</div>
+                      )}
+                    </div>
                   </div>
                 )}
                 {openGap && openGap.confirmed && (
@@ -1386,7 +1398,26 @@ export function ReviewPage({
               cloudQuality={selected.cloud_quality}
               cloudQualityAll={selected.cloud_quality_all}
               defaultPlate={consensusPlate(selected)}
-              onChanged={() => setGtReload((value) => value + 1)}
+              onChanged={(updated) => {
+                // Real-time: merge the returned record straight into local state so the "Cần xử lý"
+                // count + list drop this case the instant it's verified/discarded — no waiting for the
+                // refetch round-trip. The refetch below still runs to reconcile with the backend.
+                if (updated) {
+                  setGt((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          items: prev.items.map((item) =>
+                            item.record.track_id === updated.track_id
+                              ? { ...item, record: updated }
+                              : item,
+                          ),
+                        }
+                      : prev,
+                  );
+                }
+                setGtReload((value) => value + 1);
+              }}
               onDiff={setDiffToast}
               onNotify={setSaveToast}
               qualityDisagree={selected.quality_flags.includes("QUALITY_DISAGREEMENT")}
@@ -1618,7 +1649,7 @@ function GtPanel({
   suspectLogo,
 }: {
   record: GroundTruthRecord | null;
-  onChanged: () => void;
+  onChanged: (updated?: GroundTruthRecord) => void;
   onNotify?: (message: string) => void;
   onDiff?: (message: string | null) => void;
   cloudQuality?: string | null;
@@ -1691,8 +1722,14 @@ function GtPanel({
     setBusy(true);
     setError("");
     task()
-      .then(() => {
-        onChanged();
+      .then((result) => {
+        // A GT mutation resolves to the updated record — hand it up so the parent can merge it
+        // instantly (real-time count/list update) before the reconciling refetch.
+        onChanged(
+          result && typeof result === "object" && "track_id" in result
+            ? (result as GroundTruthRecord)
+            : undefined,
+        );
         if (successMessage) onNotify?.(successMessage);
       })
       .catch((reason: unknown) =>
@@ -1713,7 +1750,8 @@ function GtPanel({
   const verify = () =>
     run(async () => {
       await patchGt(record.id, { gt_text: gtToSave, note, classification: quality });
-      await actionGt(record.id, "verify");
+      // Return the VERIFIED record so the parent can optimistically drop this case from "Cần xử lý".
+      return actionGt(record.id, "verify");
     }, "Đã xác nhận GT.");
   const discard = () => run(() => actionGt(record.id, "discard"), "Đã loại bỏ lượt xe này.");
   const restore = () => run(() => actionGt(record.id, "restore"), "Đã khôi phục lượt xe.");

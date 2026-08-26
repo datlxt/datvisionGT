@@ -38,6 +38,9 @@ export function CondensePage({
   const [status, setStatus] = useState<CondenseStatus | null>(null);
   const [message, setMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [listReload, setListReload] = useState(0);
+  // Collapse the (tall) result card to a one-line header so the page stays compact — the result
+  // persists / can be reopened from the list, so it needn't stay fully expanded.
+  const [resultCollapsed, setResultCollapsed] = useState(false);
   // Optional lane box (normalized 0-1) so the cut ignores activity in adjacent lanes.
   const roiVideoRef = useRef<HTMLVideoElement>(null);
   const roiDragStart = useRef<{ x: number; y: number } | null>(null);
@@ -441,16 +444,37 @@ export function CondensePage({
 
       {done && (
         <div className="card condense-result">
-          <header className="section-heading">
+          <header
+            className={`section-heading condense-result-head${
+              resultCollapsed ? " is-collapsed" : ""
+            }`}
+          >
             <span className="section-heading-done">
               <Icon name="check" size={18} />
             </span>
             <div>
               <h2>Đã cắt xong</h2>
               <p>Giữ lại {status!.segment_count} đoạn có xe, ghép thành một video liền mạch.</p>
+              {status!.source_name && (
+                <p className="condense-result-name" title={status!.source_name}>
+                  <Icon name="video" size={13} />
+                  <span>{status!.source_name}</span>
+                </p>
+              )}
             </div>
+            <button
+              aria-label={resultCollapsed ? "Mở rộng" : "Thu gọn"}
+              className={`condense-collapse${resultCollapsed ? "" : " condense-collapse-open"}`}
+              onClick={() => setResultCollapsed((value) => !value)}
+              title={resultCollapsed ? "Mở rộng" : "Thu gọn"}
+              type="button"
+            >
+              <Icon name="chevron" size={18} />
+            </button>
           </header>
 
+          {!resultCollapsed && (
+            <>
           <div className="condense-result-body">
             <video
               className="condense-preview"
@@ -495,6 +519,8 @@ export function CondensePage({
               <Icon name="arrow" size={18} />
             </button>
           </div>
+            </>
+          )}
         </div>
       )}
 

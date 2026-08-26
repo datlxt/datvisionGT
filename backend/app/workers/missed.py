@@ -35,15 +35,16 @@ from app.models.recognition import RecognitionResult
 from app.vision.plate.cloud_ocr import read_gap_vehicle_openai
 from app.vision.plate.domain import plate_key
 
-# A gap must be at least this long to be worth scanning — matches the frontend "nghi bỏ sót" bar.
-# Lowered 6s → 3.5s to also scan SHORT gaps (e.g. a bicycle briefly crossing) at the cost of more AI
-# calls + more candidates for the human to confirm.
-_MIN_GAP_MS = 2_000
-# Each detected vehicle interval is padded by this on EACH side before computing gaps, so a car's
-# lead-in / standstill overhang (its track can end while it still idles at the barrier) is treated as
-# "covered". Tuned to OVER-WARN (a missed vehicle is far worse than a spare warning the human dismisses
-# in one click): 4s → a real gap must exceed ~14s (was 18s) so more borderline stretches get scanned.
-_OVERHANG_PAD_MS = 1_200
+# A gap must be at least this long to be scanned. This MUST equal the frontend's GAP_MIN (the "nghi
+# bỏ sót" bar in ReviewPage) so the header count ("AI đã rà soát N đoạn trống") matches the number of
+# gaps actually drawn on the timeline — otherwise the AI silently scans small sub-6s gaps the reviewer
+# never sees and the two counts disagree. Keep the two constants in lock-step.
+_MIN_GAP_MS = 6_000
+# No interval padding: the frontend computes raw gaps between displayed events with NO padding, so we
+# must too or the gap SET (and its count) drifts from the timeline. A detected vehicle's idle overhang
+# is instead handled downstream by _EDGE_MARGIN_MS (sample the gap's middle) + _ADJACENT_VEHICLE_MS
+# (drop a sighting hugging a detected pass), which keep false "misses" out without changing the gaps.
+_OVERHANG_PAD_MS = 0
 # Ignore this much at each gap edge. Kept small so a vehicle passing near a gap boundary (e.g. a slow
 # scooter being WALKED through) is still sampled instead of inset away.
 _EDGE_MARGIN_MS = 1_000

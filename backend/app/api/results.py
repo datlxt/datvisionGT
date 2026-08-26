@@ -197,6 +197,19 @@ def _merge_persisted_motion_candidates(
         # A HUMAN-added case (MANUAL_…) is ground truth the reviewer just asserted — NEVER drop it.
         if event.track_code.startswith("MANUAL"):
             return False
+        # A SHORT no-plate fragment (<= 1.5s) sitting right next to a plated pass (<= 1.5s before or
+        # after it) is that same vehicle's plate-not-yet-visible ENTRY or plate-gone EXIT — e.g. MOG2
+        # caught the bike as a motion blob entering the gate ~0.5s before YOLOX+OCR locked onto its
+        # plate, leaving a false 1s "xe không biển" just before the real read. A REAL plateless
+        # vehicle lingers longer (> 1.5s) AND sits in a plate-free gap (>= a few seconds from any
+        # plated pass), so this removes only the split-off entry/exit, never a genuine no-plate case.
+        entry_exit_ms = 1_500
+        if event.end_timestamp_ms - event.start_timestamp_ms <= entry_exit_ms and any(
+            event.start_timestamp_ms <= pe.end_timestamp_ms + entry_exit_ms
+            and event.end_timestamp_ms >= pe.start_timestamp_ms - entry_exit_ms
+            for pe in plated
+        ):
+            return True
         # Only a lone BLIP (1-2 detections = a single-frame tracker re-detection of a vehicle idling
         # at the barrier) is treated as an overhang fragment when it merely sits NEAR a plated pass.
         # A no-plate track with >= 3 detections is a REAL vehicle transiting the lane — it must NOT be

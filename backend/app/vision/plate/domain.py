@@ -739,6 +739,22 @@ def consolidate_vehicle_events(
         # filters. The noise-specific filters (misread card, non-plate shape, duplicate/weak fragment)
         # still apply regardless — those are genuine false reads, not vehicles.
         sustained = event.vehicle_detection_count >= 3
+        # A SHORT no-plate fragment (<= 1.5s) sitting right next to a plated pass (<= 1.5s before or
+        # after it) is that same vehicle's plate-not-yet-visible ENTRY / plate-gone EXIT — e.g. MOG2
+        # caught the bike as a motion blob entering the gate ~0.5s before YOLOX+OCR locked onto its
+        # plate, leaving a false ~1s "xe không biển" right before the real read. A REAL plateless
+        # vehicle lingers longer (> 1.5s) AND sits in a plate-free gap (a few seconds from any plated
+        # pass), so this removes only the split-off entry/exit, never a genuine no-plate case. This is
+        # broader than the overlap rule above (the fragment need not overlap — a 0.5s gap is enough).
+        entry_exit_fragment = (
+            event.plate_detection_count == 0
+            and event.end_timestamp_ms - event.start_timestamp_ms <= 1_500
+            and any(
+                event.start_timestamp_ms <= plate_event.end_timestamp_ms + 1_500
+                and event.end_timestamp_ms >= plate_event.start_timestamp_ms - 1_500
+                for plate_event in plated
+            )
+        )
         if (
             # A no-plate event that OVERLAPS a plated pass in time is that vehicle's own body detected
             # without its plate (YOLOX boxes the bike separately from where the plate reads) — it
@@ -746,6 +762,7 @@ def consolidate_vehicle_events(
             # when sustained. A sustained no-plate event in a plated-FREE stretch is a REAL crossing
             # vehicle (a bicycle / plateless e-bike) and is kept; only a brief blip there is dropped.
             (event.plate_detection_count == 0 and (overlaps_plated_event or not sustained))
+            or entry_exit_fragment
             or (motion_only and not sustained)
             or weak_unreadable_plate
             or split_unreadable_fragment
